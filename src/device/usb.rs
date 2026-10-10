@@ -1,5 +1,6 @@
 //! HID access, bounded response framing and Maxwell sound protocol mapping.
 use super::command::Command;
+use super::profiles::{DeviceIdentity, DeviceProfile, AUDEZE_VID, MAXWELL_USAGE, MAXWELL_USAGE_PAGE};
 use crate::model::SoundState;
 use windows::{
     core::PCWSTR,
@@ -19,6 +20,7 @@ pub struct Device {
     stream: Vec<u8>,
     eq_slot: u8,
     eq_read_slot: Option<u8>,
+    profile: DeviceProfile,
 }
 impl Drop for Device {
     fn drop(&mut self) {
@@ -149,7 +151,9 @@ impl Device {
                     }
                     let path = PCWSTR((*detail).DevicePath.as_ptr());
                     let path_text = path.to_string().unwrap_or_default().to_ascii_lowercase();
-                    if !path_text.contains("vid_3329&pid_4ba9") || !path_text.contains("col02") {
+                    // Match any supported Maxwell variant by VID; profile matching
+                    // happens after HID attributes are read.
+                    if !path_text.contains("vid_3329&pid_4ba") {
                         continue;
                     }
                     let handle = CreateFileW(
@@ -166,15 +170,16 @@ impl Device {
                         Size: std::mem::size_of::<HIDD_ATTRIBUTES>() as u32,
                         ..Default::default()
                     };
+                    if !HidD_GetAttributes(handle, &mut attrs) {
+                        let _ = CloseHandle(handle);
+                        continue;
+                    }
                     let mut preparsed = PHIDP_PREPARSED_DATA::default();
                     let mut caps = HIDP_CAPS::default();
-                    let identity = HidD_GetAttributes(handle, &mut attrs)
-                        && attrs.VendorID == 0x3329
-                        && attrs.ProductID == 0x4ba9;
-                    let usage = if identity && HidD_GetPreparsedData(handle, &mut preparsed) {
+                    let usage = if HidD_GetPreparsedData(handle, &mut preparsed) {
                         let status = HidP_GetCaps(preparsed, &mut caps);
                         let _ = HidD_FreePreparsedData(preparsed);
-                        status.0 >= 0 && caps.UsagePage == 0xff13 && caps.Usage == 1
+                        status.0 >= 0
                     } else {
                         false
                     };
@@ -187,6 +192,19 @@ impl Device {
                         let _ = CloseHandle(handle);
                         continue;
                     }
+                    let identity = DeviceIdentity {
+                        vendor_id: attrs.VendorID,
+                        product_id: attrs.ProductID,
+                        usage_page: caps.UsagePage,
+                        usage: caps.Usage,
+                    };
+                    let profile = match DeviceProfile::match_identity(identity) {
+                        Some(p) => p.clone(),
+                        None => {
+                            let _ = CloseHandle(handle);
+                            continue;
+                        }
+                    };
                     return Ok(Self {
                         path: path_text.encode_utf16().chain(Some(0)).collect(),
                         input_len: caps.InputReportByteLength as usize,
@@ -195,6 +213,7 @@ impl Device {
                         stream: Vec::with_capacity(256),
                         eq_slot: 6,
                         eq_read_slot: None,
+                        profile,
                     });
                 }
                 Err("Connect the Maxwell 2 ANC USB dongle.".into())
@@ -205,6 +224,10 @@ impl Device {
     }
     pub fn listen(&self) -> Result<crate::hid_listener::InputListener> {
         crate::hid_listener::InputListener::open(&self.path, self.input_len)
+    }
+    /// Returns the matched device profile.
+    pub fn profile(&self) -> &DeviceProfile {
+        &self.profile
     }
     fn packet(&self, body: &[u8]) -> Result<()> {
         let mut storage = [0u8; 512];

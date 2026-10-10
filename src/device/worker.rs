@@ -1,6 +1,7 @@
 //! Maxwell 2 ANC USB-dongle sound protocol. Only the observed sound commands
 //! are exposed, including bounded custom EQ edits. No firmware or arbitrary commands.
 use super::usb::{Device, Query, QUERIES};
+use super::profiles::DeviceProfile;
 use crate::{
     device::command::{Command, Controller, QueuedCommand, CONTROL_MESSAGE, STATUS_MESSAGE},
     model::SoundState,
@@ -106,6 +107,14 @@ fn query_interval(q: Query) -> Duration {
         // Space status reads out; explicit controls still schedule readback.
         _ => 1000,
     })
+}
+fn query_enabled(q: Query, profile: &DeviceProfile) -> bool {
+    match q {
+        Query::Anc if !profile.has_anc => false,
+        Query::Side if !profile.has_sidetone => false,
+        Query::Noise if !profile.has_noise_control => false,
+        _ => true,
+    }
 }
 #[derive(Default)]
 struct TraceMeta<'a> {
@@ -242,12 +251,19 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
         loop {
             let result = (|| -> Result<()> {
                 let mut device = Device::open()?;
+                let profile = device.profile().clone();
                 let mut state = SoundState {
-                    device: Some("Maxwell 2 ANC".into()),
+                    device: Some(profile.display_name.into()),
                     connection: Some("USB Dongle".into()),
                     ..SoundState::default()
                 };
                 let mut due = [Instant::now(); 11];
+                // Disable periodic queries for features this device lacks.
+                for i in 0..11 {
+                    if !query_enabled(QUERIES[i], &profile) {
+                        due[i] = Instant::now() + Duration::from_secs(3600);
+                    }
+                }
                 let mut last_good = Instant::now();
                 let mut waiting: Vec<(Query, Instant, QueuedCommand)> = vec![];
                 let mut flight: Option<(Query, Instant, u64)> = None;
