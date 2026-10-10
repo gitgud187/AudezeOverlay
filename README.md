@@ -268,7 +268,12 @@ and creates a standalone x64 EXE, portable ZIP, per-user installer and SHA-256
 checksums. Open **Actions → Windows build and release → Artifacts → windows-x64**
 for development builds. Layout preview images are a separate artifact.
 
-To publish a release, set the version in `Cargo.toml`, run `cargo check` to
+Successful pushes to `main` publish the EXE, portable ZIP and installer as the
+[latest release](https://github.com/temdah/AudezeOverlay/releases/latest).
+This rolling release uses the `development` tag and is updated on each successful
+main build. No manual tag is needed.
+
+To additionally publish a numbered release, set the version in `Cargo.toml`, run `cargo check` to
 update `Cargo.lock`, commit, then push a matching version tag:
 
 ```powershell
@@ -278,8 +283,8 @@ git push origin v0.4.1
 
 The tag must match the package version. The workflow publishes the tested
 downloads to GitHub Releases with generated release notes. Ordinary branches
-create build artifacts; successful `main` builds also update the **development**
-prerelease with downloadable EXE, ZIP and installer files. Release publishing uses the repository's built-in
+create build artifacts. Version tags containing a hyphen publish prereleases;
+main builds publish a normal release marked **Latest**. Release publishing uses the repository's built-in
 `GITHUB_TOKEN`; no personal token or extra repository secret is required.
 Publishing permissions are limited to the release job. Actions are pinned to
 commit hashes, and the Inno Setup compiler download has a pinned SHA-256 hash.

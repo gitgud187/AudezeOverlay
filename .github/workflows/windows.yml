@@ -107,7 +107,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $development = $env:REF_TYPE -ne 'tag'
           $tag = if ($development) { 'development' } else { $env:REF_NAME }
-          $title = if ($development) { 'Latest development build' } else { $tag }
+          $title = if ($development) { 'Latest main build' } else { $tag }
           if ($development) {
             gh api "repos/$env:GH_REPO/git/ref/tags/$tag" *> $null
             if ($LASTEXITCODE -eq 0) {
@@ -124,14 +124,19 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
           } else {
             $options = @('--verify-tag', '--title', $title)
-            if ($development -or $tag.Contains('-')) { $options += @('--prerelease', '--latest=false') }
+            if (!$development -and $tag.Contains('-')) {
+              $options += @('--prerelease', '--latest=false')
+            } else {
+              $options += '--latest'
+            }
             if (!$development) { $options += '--generate-notes' }
             gh release create $tag @files --repo $env:GH_REPO @options
             if ($LASTEXITCODE -ne 0) { throw 'Release creation failed' }
           }
           if ($development) {
-            "Automatically built from main at commit $env:COMMIT_SHA. Download the setup EXE for installation, or the portable ZIP. This is a development prerelease; version tags publish numbered releases. Packages are unsigned." | Set-Content -LiteralPath release-notes.txt
-            gh release edit $tag --repo $env:GH_REPO --title $title --notes-file release-notes.txt --prerelease --latest=false
+            "Automatically built and tested from main at commit $env:COMMIT_SHA. Download the setup EXE for installation, or the portable ZIP. This rolling release is updated after successful main builds; version tags publish separate numbered releases. Packages are unsigned." | Set-Content -LiteralPath release-notes.txt
+            # Promote existing prereleases too, so GitHub lists the main build as Latest.
+            gh release edit $tag --repo $env:GH_REPO --title $title --notes-file release-notes.txt --draft=false --prerelease=false --latest
             if ($LASTEXITCODE -ne 0) { throw 'Release notes update failed' }
             # Remove superseded build filenames only after the new files uploaded.
             $assetJson = gh release view $tag --repo $env:GH_REPO --json assets
@@ -142,5 +147,14 @@ jobs:
                 gh release delete-asset $tag $asset.name --repo $env:GH_REPO --yes
                 if ($LASTEXITCODE -ne 0) { throw 'Could not remove an obsolete development asset' }
               }
+            }
+            $latestJson = gh api "repos/$env:GH_REPO/releases/latest"
+            if ($LASTEXITCODE -ne 0) { throw 'Latest release is not publicly available' }
+            $latest = $latestJson | ConvertFrom-Json
+            if ($latest.tag_name -ne $tag -or $latest.draft -or $latest.prerelease) {
+              throw 'Main build was not published as the latest public release'
+            }
+            foreach ($name in $currentNames) {
+              if ($name -notin $latest.assets.name) { throw "Latest release is missing $name" }
             }
           }
