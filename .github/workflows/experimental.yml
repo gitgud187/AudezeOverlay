@@ -80,5 +80,5 @@ jobs:
             gh release delete $tag --repo $env:GH_REPO --yes
             if ($LASTEXITCODE -ne 0) { throw 'Could not delete existing experimental release' }
           }
-          gh release create $tag @files --repo $env:GH_REPO --title $title --notes "$body" --prerelease --latest=false
+          gh release create $tag @files --repo $env:GH_REPO --title $title --notes "$body" --prerelease
           if ($LASTEXITCODE -ne 0) { throw 'Experimental release creation failed' }
