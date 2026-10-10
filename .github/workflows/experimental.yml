@@ -1,0 +1,84 @@
+name: Experimental build
+
+on:
+  push:
+    branches: ['experimental/*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add x86_64-pc-windows-msvc
+      - name: Check formatting and tests
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked --all-targets --all-features --target x86_64-pc-windows-msvc -- -D warnings
+          cargo test --locked --all-features --all-targets --target x86_64-pc-windows-msvc
+      - name: Build
+        run: |
+          cargo build --locked --release --target x86_64-pc-windows-msvc --bin audeze-overlay
+      - name: Package
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          $match = Select-String -LiteralPath Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1
+          $version = $match.Matches[0].Groups[1].Value
+          $label = "$version-exp.$($env:REF_NAME).$($env:COMMIT_SHA.Substring(0, 8))"
+          ./tools/package.ps1 -BuildLabel $label -BinaryPath 'target/x86_64-pc-windows-msvc/release/audeze-overlay.exe'
+      - name: Upload artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: experimental-x64
+          path: |
+            dist/release/Audeze-Overlay-Setup.exe
+            dist/release/Audeze-Overlay-Portable.zip
+            dist/release/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: experimental-x64
+          path: release
+      - name: Publish experimental release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          $tag = "experimental-$($env:REF_NAME)"
+          $title = "Experimental: $env:REF_NAME"
+          $body = "Experimental build from branch $env:REF_NAME.`n`nBuilt from commit $env:COMMIT_SHA. Not suitable for production use."
+          $files = @(Get-ChildItem -LiteralPath release -File | ForEach-Object FullName)
+          gh release view $tag --repo $env:GH_REPO *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete $tag --repo $env:GH_REPO --yes
+            if ($LASTEXITCODE -ne 0) { throw 'Could not delete existing experimental release' }
+          }
+          gh release create $tag @files --repo $env:GH_REPO --title $title --notes "$body" --prerelease --latest=false
+          if ($LASTEXITCODE -ne 0) { throw 'Experimental release creation failed' }
