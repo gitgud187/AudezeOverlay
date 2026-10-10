@@ -336,6 +336,7 @@ unsafe fn run() -> Result<()> {
 }
 fn sample() -> SoundState {
     SoundState {
+        capabilities: None,
         mix_revision: 0,
         eq_index: Some(0),
         eq_bands: None,
@@ -606,6 +607,15 @@ unsafe fn reset(app: &mut App) {
     show(app, true);
 }
 unsafe fn send(app: &mut App, c: Command) {
+    if app
+        .sound
+        .capabilities
+        .is_some_and(|caps| !c.supported_by(caps))
+    {
+        app.note = "This headset does not support that control.".into();
+        request_draw(app);
+        return;
+    }
     if app.demo {
         match c {
             Command::Mix(p) => app.sound.mix = Some((100 - p, p)),

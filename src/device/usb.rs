@@ -1,6 +1,6 @@
 //! HID access, bounded response framing and Maxwell sound protocol mapping.
 use super::command::Command;
-use super::profiles::{DeviceIdentity, DeviceProfile, AUDEZE_VID, MAXWELL_USAGE, MAXWELL_USAGE_PAGE};
+use super::profiles::{DeviceIdentity, DeviceProfile};
 use crate::model::SoundState;
 use windows::{
     core::PCWSTR,
@@ -42,6 +42,16 @@ pub enum Query {
     EqBands,
     EqWriteAck,
     EqSelectAck,
+}
+impl Query {
+    pub(super) fn supported_by(self, capabilities: crate::model::SoundCapabilities) -> bool {
+        match self {
+            Self::Anc => capabilities.anc,
+            Self::Side | Self::Level => capabilities.sidetone_max.is_some_and(|max| max > 0),
+            Self::Noise => capabilities.noise,
+            _ => true,
+        }
+    }
 }
 /// An incomplete frame holds at most 191 bytes; the next report adds at most 61.
 /// Even at the six-byte minimum frame size, 64 slots cover that bounded input.
@@ -153,7 +163,7 @@ impl Device {
                     let path_text = path.to_string().unwrap_or_default().to_ascii_lowercase();
                     // Match any supported Maxwell variant by VID; profile matching
                     // happens after HID attributes are read.
-                    if !path_text.contains("vid_3329&pid_4ba") {
+                    if !path_text.contains("vid_3329&pid_4ba") || !path_text.contains("col02") {
                         continue;
                     }
                     let handle = CreateFileW(
@@ -226,7 +236,7 @@ impl Device {
         crate::hid_listener::InputListener::open(&self.path, self.input_len)
     }
     /// Returns the matched device profile.
-    pub fn profile(&self) -> &DeviceProfile {
+    pub(super) fn profile(&self) -> &DeviceProfile {
         &self.profile
     }
     fn packet(&self, body: &[u8]) -> Result<()> {
@@ -245,6 +255,9 @@ impl Device {
         Ok(())
     }
     pub fn query(&mut self, q: Query) -> Result<()> {
+        if !q.supported_by(self.profile.capabilities()) {
+            return Err("This headset does not support that query.".into());
+        }
         self.eq_read_slot = (q == Query::EqBands).then_some(self.eq_slot);
         self.packet(match q {
             Query::EqWriteAck | Query::EqSelectAck => return Ok(()),
@@ -262,6 +275,9 @@ impl Device {
         })
     }
     pub fn set(&mut self, c: &Command) -> Result<Query> {
+        if !c.supported_by(self.profile.capabilities()) {
+            return Err("This headset does not support that control.".into());
+        }
         match c {
             Command::EqLoad(slot) if (6..=9).contains(slot) => {
                 self.eq_slot = *slot;
@@ -309,7 +325,7 @@ impl Device {
                     9,
                     0x2c,
                     0,
-                    (*p as f32 * 31. / 100.).round() as u8,
+                    (*p as f32 * self.profile.sidetone_max as f32 / 100.).round() as u8,
                 ],
             ),
             Command::Anc(s) => {
@@ -439,18 +455,23 @@ pub fn parse_frame(b: &[u8], s: &mut SoundState) -> Option<Query> {
                 s.mix = Some((100 - chat, chat));
                 Query::Mix
             }
-            7 if b[9] <= 1 => {
+            7 if b[9] <= 1 && s.capabilities.is_none_or(|c| c.sidetone_max.is_some()) => {
                 s.sidetone = Some(b[9] != 0);
                 Query::Side
             }
             _ => return None,
         },
         (1, 9) if b.len() == 10 && b[7] == 0 && b[8] == 0 => match b[6] {
-            0x2c if b[9] <= 31 => {
-                s.sidetone_level = Some((b[9] as f32 * 100. / 31.).round() as u8);
+            0x2c => {
+                // Standalone diagnostic parsing defaults to the verified ANC scale.
+                let max = s.capabilities.map_or(Some(31), |c| c.sidetone_max)?;
+                if max == 0 || b[9] > max {
+                    return None;
+                }
+                s.sidetone_level = Some((b[9] as f32 * 100. / max as f32).round() as u8);
                 Query::Level
             }
-            0x24 if b[9] <= 2 => {
+            0x24 if b[9] <= 2 && s.capabilities.is_none_or(|c| c.noise) => {
                 replace_text(&mut s.noise, ["Off", "Low", "High"][b[9] as usize]);
                 Query::Noise
             }
@@ -468,7 +489,13 @@ pub fn parse_frame(b: &[u8], s: &mut SoundState) -> Option<Query> {
             s.eq_index = Some(b[8]);
             Query::EqIndex
         }
-        (0x30, 0x2e) if b.len() == 9 && b[6] == 2 && b[7] == 0 && b[8] <= 2 => {
+        (0x30, 0x2e)
+            if b.len() == 9
+                && b[6] == 2
+                && b[7] == 0
+                && b[8] <= 2
+                && s.capabilities.is_none_or(|c| c.anc) =>
+        {
             replace_text(&mut s.anc, ANC_MODES[b[8] as usize]);
             Query::Anc
         }
@@ -494,6 +521,42 @@ fn consume_report_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unsupported_replies_do_not_create_readings_and_sidetone_uses_device_range() {
+        let mut state = SoundState {
+            capabilities: Some(crate::model::SoundCapabilities {
+                anc: false,
+                sidetone_max: None,
+                noise: false,
+            }),
+            ..Default::default()
+        };
+        for frame in [
+            vec![5, 0x5b, 5, 0, 0x30, 0x2e, 2, 0, 0],
+            vec![5, 0x5b, 6, 0, 0x83, 0x2c, 0, 7, 0, 1],
+            vec![5, 0x5b, 6, 0, 1, 9, 0x2c, 0, 0, 15],
+            vec![5, 0x5b, 6, 0, 1, 9, 0x24, 0, 0, 1],
+        ] {
+            assert_eq!(parse_frame(&frame, &mut state), None);
+        }
+        assert!(
+            state.anc.is_none()
+                && state.sidetone.is_none()
+                && state.sidetone_level.is_none()
+                && state.noise.is_none()
+        );
+        state.capabilities.as_mut().unwrap().sidetone_max = Some(15);
+        assert_eq!(
+            parse_frame(&[5, 0x5b, 6, 0, 1, 9, 0x2c, 0, 0, 15], &mut state),
+            Some(Query::Level)
+        );
+        assert_eq!(state.sidetone_level, Some(100));
+        assert_eq!(
+            parse_frame(&[5, 0x5b, 6, 0, 1, 9, 0x2c, 0, 0, 16], &mut state),
+            None
+        );
+        assert_eq!(state.sidetone_level, Some(100));
+    }
     #[test]
     fn eq_read_frames_use_q_before_gain_and_survive_fragmentation() {
         let mut expected = crate::eq::sample(8);

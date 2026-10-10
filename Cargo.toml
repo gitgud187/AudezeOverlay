@@ -8,6 +8,8 @@ license = "MIT"
 [features]
 legacy-uia = []
 perf-stats = []
+# Enables provisional device identities; distributed only as an experimental prerelease.
+experimental-devices = []
 
 [[bin]]
 name = "bench-worker"

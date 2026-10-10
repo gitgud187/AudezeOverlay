@@ -33,6 +33,23 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
             i == 0,
         );
     }
+    let supported = v.sound.capabilities.is_none_or(|caps| match i {
+        1 => caps.sidetone_max.is_some_and(|max| max > 0),
+        2 => caps.anc,
+        3 => caps.noise,
+        _ => true,
+    });
+    if !supported {
+        c.text(
+            "Not supported",
+            Box2::new(inner.x, inner.y + 36., inner.w, 26.),
+            14. * fs,
+            SUB,
+            false,
+            false,
+        );
+        return;
+    }
     match i {
         0 => {
             let mut radius = ((r.w - 52.) / 2.).min((r.h - 112.) / 2.).max(32.);

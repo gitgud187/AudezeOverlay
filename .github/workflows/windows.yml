@@ -2,7 +2,7 @@ name: Windows build and release
 
 on:
   push:
-    branches: ['main']
+    branches: ['**', '!experimental/**']
     tags: ['v*']
   pull_request:
   workflow_dispatch:

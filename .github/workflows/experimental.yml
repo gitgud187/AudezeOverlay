@@ -8,8 +8,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: experimental-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
+    if: startsWith(github.ref, 'refs/heads/experimental/')
     runs-on: windows-2022
     timeout-minutes: 30
     defaults:
@@ -22,16 +27,29 @@ jobs:
       - name: Set up Rust
         run: |
           rustup update stable --no-self-update
+          if ($LASTEXITCODE -ne 0) { throw 'Rust update failed' }
           rustup default stable
+          if ($LASTEXITCODE -ne 0) { throw 'Rust selection failed' }
           rustup target add x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'Rust target setup failed' }
+          rustup component add rustfmt clippy
+          if ($LASTEXITCODE -ne 0) { throw 'Rust components setup failed' }
       - name: Check formatting and tests
         run: |
           cargo fmt --all --check
+          if ($LASTEXITCODE -ne 0) { throw 'Formatting failed' }
           cargo clippy --locked --all-targets --all-features --target x86_64-pc-windows-msvc -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'Clippy failed' }
           cargo test --locked --all-features --all-targets --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'Experimental tests failed' }
+          cargo test --locked --all-targets --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'Verified-only tests failed' }
       - name: Build
         run: |
-          cargo build --locked --release --target x86_64-pc-windows-msvc --bin audeze-overlay
+          cargo build --locked --release --target x86_64-pc-windows-msvc --features experimental-devices --bin audeze-overlay --bin preview-layouts
+          if ($LASTEXITCODE -ne 0) { throw 'Experimental build failed' }
+          & 'target/x86_64-pc-windows-msvc/release/preview-layouts.exe'
+          if ($LASTEXITCODE -ne 0) { throw 'Preview generation failed' }
       - name: Package
         env:
           REF_NAME: ${{ github.ref_name }}
@@ -39,7 +57,7 @@ jobs:
         run: |
           $match = Select-String -LiteralPath Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1
           $version = $match.Matches[0].Groups[1].Value
-          $branch = $env:REF_NAME -replace '/', '-'
+          $branch = $env:REF_NAME -replace '[^0-9A-Za-z.-]', '-'
           $label = "$version-exp-$branch-$($env:COMMIT_SHA.Substring(0, 8))"
           ./tools/package.ps1 -BuildLabel $label -BinaryPath 'target/x86_64-pc-windows-msvc/release/audeze-overlay.exe'
       - name: Upload artifacts
@@ -72,14 +90,62 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
-          $tag = "experimental-$($env:REF_NAME)"
-          $title = "Experimental: $env:REF_NAME"
-          $body = "Experimental build from branch $env:REF_NAME.`n`nBuilt from commit $env:COMMIT_SHA. Not suitable for production use."
-          $files = @(Get-ChildItem -LiteralPath release -File | ForEach-Object FullName)
+          $ErrorActionPreference = 'Stop'
+          $branch = $env:REF_NAME -replace '[^0-9A-Za-z.-]', '-'
+          # Immutable per-commit tags prevent stale tags or concurrent runs from
+          # attaching a binary to a different source revision.
+          $tag = "experimental-$branch-$env:COMMIT_SHA"
+          $title = "EXPERIMENTAL - $env:REF_NAME ($($env:COMMIT_SHA.Substring(0, 8)))"
+          $download = "https://github.com/$env:GH_REPO/releases/download/$tag"
+          @(
+            '> **EXPERIMENTAL / UNVERIFIED: This build may contain bugs, incorrect device mappings, failed controls or regressions. Use the regular Latest release for the verified device path.**',
+            '',
+            '## Downloads for Windows 11 (64-bit)',
+            '',
+            "**[Experimental installer - recommended]($download/Audeze-Overlay-Setup.exe)**",
+            '',
+            "[Experimental portable ZIP]($download/Audeze-Overlay-Portable.zip) - extract and run Audeze Overlay.exe.",
+            '',
+            '## What is new',
+            '',
+            '- Fixes profile compilation and the connection-time query-index panic.',
+            '- Gates unsupported controls and queries, including sidetone level; preserves the 50 ms mix target.',
+            '- Enables provisional PID mappings 0x4BA7, 0x4BA8 and 0x4BAA in experimental builds only. Model assignments, protocol compatibility and ranges are guesses, not hardware-tested support.',
+            '- Adds capability-aware controls and a visible experimental warning.',
+            '',
+            'Only the existing Maxwell 2 ANC / 0x4BA9 path has prior hardware validation. This build has not established additional hardware support or anti-cheat compatibility. Packages are unsigned. Live EQ edits write to the headset immediately.',
+            '',
+            "[Changes compared with main](https://github.com/$env:GH_REPO/compare/main...$env:COMMIT_SHA)",
+            '',
+            "Built from commit $env:COMMIT_SHA on branch $env:REF_NAME."
+          ) | Set-Content -LiteralPath release-notes.txt -Encoding utf8
+          $files = @('Audeze-Overlay-Setup.exe', 'Audeze-Overlay-Portable.zip', 'SHA256SUMS.txt')
+          $paths = @($files | ForEach-Object { Join-Path release $_ })
+          foreach ($path in $paths) {
+            if (!(Test-Path -LiteralPath $path)) { throw "Missing release asset: $path" }
+          }
+          foreach ($line in Get-Content -LiteralPath release/SHA256SUMS.txt) {
+            if ($line -notmatch '^([a-f0-9]{64})  (Audeze-Overlay-(?:Setup.exe|Portable.zip))$') { throw 'Invalid checksum entry' }
+            $expected = $Matches[1]
+            $path = Join-Path release $Matches[2]
+            if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw 'Package checksum mismatch' }
+          }
           gh release view $tag --repo $env:GH_REPO *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release delete $tag --repo $env:GH_REPO --yes
-            if ($LASTEXITCODE -ne 0) { throw 'Could not delete existing experimental release' }
+            gh release upload $tag @paths --repo $env:GH_REPO --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Experimental upload failed' }
+            gh release edit $tag --repo $env:GH_REPO --title $title --notes-file release-notes.txt --prerelease
+          } else {
+            gh release create $tag @paths --repo $env:GH_REPO --target $env:COMMIT_SHA --title $title --notes-file release-notes.txt --prerelease
           }
-          gh release create $tag @files --repo $env:GH_REPO --title $title --notes "$body" --prerelease
-          if ($LASTEXITCODE -ne 0) { throw 'Experimental release creation failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'Experimental release publication failed' }
+          $json = gh api "repos/$env:GH_REPO/releases/tags/$tag"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot verify published prerelease' }
+          $published = $json | ConvertFrom-Json
+          if (!$published.prerelease -or $published.draft -or !$published.body.Contains($env:COMMIT_SHA)) { throw 'Incorrect prerelease metadata' }
+          if (@($published.assets).Count -ne $files.Count) { throw 'Unexpected release assets' }
+          foreach ($file in $files) {
+            if ($file -notin $published.assets.name) { throw "Missing public asset: $file" }
+          }
+          $ref = gh api "repos/$env:GH_REPO/git/ref/tags/$tag"
+          if ($LASTEXITCODE -ne 0 -or ($ref | ConvertFrom-Json).object.sha -ne $env:COMMIT_SHA) { throw 'Tag does not match the built commit' }

@@ -23,6 +23,17 @@ pub enum Command {
     Noise(String),
 }
 impl Command {
+    /// Shared UI/transport gate; the transport checks again before writing.
+    pub fn supported_by(&self, capabilities: crate::model::SoundCapabilities) -> bool {
+        match self {
+            Self::Anc(_) => capabilities.anc,
+            Self::Sidetone(_) | Self::SidetoneLevel(_) => {
+                capabilities.sidetone_max.is_some_and(|max| max > 0)
+            }
+            Self::Noise(_) => capabilities.noise,
+            _ => true,
+        }
+    }
     /// A band edit replaces only the same band's queued edit, never other bands.
     pub(crate) fn supersedes(&self, old: &Self) -> bool {
         match (self, old) {

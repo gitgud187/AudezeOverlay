@@ -15,6 +15,7 @@ fn main() {
     std::fs::create_dir_all("diagnostics").expect("diagnostics directory");
     let mut painter = Painter::new();
     let sound = SoundState {
+        capabilities: None,
         mix_revision: 0,
         eq_index: Some(0),
         eq_bands: None,
@@ -153,6 +154,34 @@ fn main() {
         let path = format!("diagnostics/layout-{name}.png");
         scene.pix.save_png(&path).expect("save preview PNG");
         println!("{path}: ANC bounds and nonoverlap verified");
+        let mut unsupported = sound.clone();
+        unsupported.capabilities = Some(audeze_overlay::model::SoundCapabilities {
+            anc: false,
+            sidetone_max: None,
+            noise: false,
+        });
+        let unsupported_view = View {
+            sound: &unsupported,
+            ..view
+        };
+        let scene = dashboard::render(
+            &mut painter,
+            config.width,
+            config.height,
+            1.,
+            &unsupported_view,
+        );
+        assert!(
+            !scene.hits.iter().any(|hit| matches!(
+                hit.action,
+                Action::Anc(_) | Action::Noise(_) | Action::Side | Action::Level
+            )),
+            "{name}: unsupported controls must have no hit targets"
+        );
+        scene
+            .pix
+            .save_png(format!("diagnostics/layout-{name}-unsupported.png"))
+            .unwrap();
     }
     let config = Config::default();
     let mut eq_editor = audeze_overlay::eq::Editor {

@@ -11,7 +11,7 @@ pub const AUDEZE_VID: u16 = 0x3329;
 pub const MAXWELL_USAGE_PAGE: u16 = 0xFF13;
 
 /// HID usage for the sound-control interface (col02).
-pub const MAXWELL_USAGE: u8 = 1;
+pub const MAXWELL_USAGE: u16 = 1;
 
 /// Device identity from USB enumeration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,7 +19,7 @@ pub struct DeviceIdentity {
     pub vendor_id: u16,
     pub product_id: u16,
     pub usage_page: u16,
-    pub usage: u8,
+    pub usage: u16,
 }
 
 /// A known device profile with its supported capabilities.
@@ -35,11 +35,18 @@ pub struct DeviceProfile {
 }
 
 impl DeviceProfile {
+    pub fn capabilities(&self) -> crate::model::SoundCapabilities {
+        crate::model::SoundCapabilities {
+            anc: self.has_anc,
+            sidetone_max: self.has_sidetone.then_some(self.sidetone_max),
+            noise: self.has_noise_control,
+        }
+    }
     /// Returns profiles for all supported Maxwell variants.
     pub fn all_maxwell_profiles() -> &'static [DeviceProfile] {
         static PROFILES: &[DeviceProfile] = &[
             // Maxwell 2 ANC — fully validated through testing.
-            Self {
+            DeviceProfile {
                 identity: DeviceIdentity {
                     vendor_id: AUDEZE_VID,
                     product_id: 0x4BA9,
@@ -54,7 +61,7 @@ impl DeviceProfile {
                 sidetone_max: 31,
             },
             // Maxwell 2 — assumed compatible; validated=false until tested.
-            Self {
+            DeviceProfile {
                 identity: DeviceIdentity {
                     vendor_id: AUDEZE_VID,
                     product_id: 0x4BA8,
@@ -69,7 +76,7 @@ impl DeviceProfile {
                 sidetone_max: 31,
             },
             // Maxwell 2 variant (0x4BAA) — assumed compatible.
-            Self {
+            DeviceProfile {
                 identity: DeviceIdentity {
                     vendor_id: AUDEZE_VID,
                     product_id: 0x4BAA,
@@ -84,7 +91,7 @@ impl DeviceProfile {
                 sidetone_max: 31,
             },
             // Maxwell (original) — assumed compatible.
-            Self {
+            DeviceProfile {
                 identity: DeviceIdentity {
                     vendor_id: AUDEZE_VID,
                     product_id: 0x4BA7,
@@ -102,11 +109,13 @@ impl DeviceProfile {
         PROFILES
     }
 
-    /// Match a discovered device identity against all known profiles.
+    /// Provisional mappings are enabled only by the experimental build feature.
+    /// Candidate PIDs came from official-app research; their model assignments,
+    /// sound protocol and ranges remain guesses, not hardware validation.
     pub fn match_identity(id: DeviceIdentity) -> Option<&'static DeviceProfile> {
         Self::all_maxwell_profiles()
             .iter()
-            .find(|p| p.identity == id)
+            .find(|p| p.identity == id && (p.validated || cfg!(feature = "experimental-devices")))
     }
 }
 
@@ -137,10 +146,12 @@ mod tests {
                 usage_page: MAXWELL_USAGE_PAGE,
                 usage: MAXWELL_USAGE,
             };
-            let profile = DeviceProfile::match_identity(id)
-                .unwrap_or_else(|| panic!("PID {:#x} should match", pid));
-            assert!(!profile.validated);
-            assert!(!profile.has_anc);
+            let profile = DeviceProfile::match_identity(id);
+            assert_eq!(profile.is_some(), cfg!(feature = "experimental-devices"));
+            if let Some(profile) = profile {
+                assert!(!profile.validated);
+                assert!(!profile.has_anc);
+            }
         }
     }
 
@@ -164,5 +175,31 @@ mod tests {
             usage: 6,
         };
         assert!(DeviceProfile::match_identity(id).is_none());
+    }
+
+    #[test]
+    fn capabilities_gate_commands_without_disabling_mix_or_eq() {
+        use crate::device::command::Command;
+        let mut profile = DeviceProfile::all_maxwell_profiles()[0].clone();
+        profile.has_anc = false;
+        profile.has_sidetone = false;
+        profile.has_noise_control = false;
+        for command in [
+            Command::Anc("On".into()),
+            Command::Sidetone(true),
+            Command::SidetoneLevel(50),
+            Command::Noise("High".into()),
+        ] {
+            assert!(!command.supported_by(profile.capabilities()));
+        }
+        assert!(Command::Mix(50).supported_by(profile.capabilities()));
+        assert!(Command::EqSelect(6).supported_by(profile.capabilities()));
+    }
+
+    #[test]
+    fn rejects_wrong_vendor_and_full_width_usage() {
+        let id = DeviceProfile::all_maxwell_profiles()[0].identity;
+        assert!(DeviceProfile::match_identity(DeviceIdentity { vendor_id: 0, ..id }).is_none());
+        assert!(DeviceProfile::match_identity(DeviceIdentity { usage: 0x101, ..id }).is_none());
     }
 }

@@ -1,7 +1,17 @@
 use serde::{Deserialize, Serialize};
 
+/// Available controls for the currently connected device, cleared on disconnect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SoundCapabilities {
+    pub anc: bool,
+    pub sidetone_max: Option<u8>,
+    pub noise: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SoundState {
+    #[serde(skip)]
+    pub capabilities: Option<SoundCapabilities>,
     pub mix: Option<(u8, u8)>,
     /// Last settled local mix command; not a headset setting or preset field.
     #[serde(skip)]

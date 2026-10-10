@@ -1,7 +1,7 @@
 //! Maxwell 2 ANC USB-dongle sound protocol. Only the observed sound commands
 //! are exposed, including bounded custom EQ edits. No firmware or arbitrary commands.
-use super::usb::{Device, Query, QUERIES};
 use super::profiles::DeviceProfile;
+use super::usb::{Device, Query, QUERIES};
 use crate::{
     device::command::{Command, Controller, QueuedCommand, CONTROL_MESSAGE, STATUS_MESSAGE},
     model::SoundState,
@@ -51,9 +51,12 @@ fn post(hwnd: isize, msg: u32) {
         }
     }
 }
-fn next_query(due: &[Instant; 11], now: Instant, previous: Option<Query>) -> Option<usize> {
-    let background = (1..7).filter(|i| due[*i] <= now).min_by_key(|i| due[*i]);
-    if due[0] <= now && (previous != Some(Query::Mix) || background.is_none()) {
+fn next_query(due: &[Option<Instant>; 11], now: Instant, previous: Option<Query>) -> Option<usize> {
+    let background = (1..QUERIES.len())
+        .filter(|i| due[*i].is_some_and(|at| at <= now))
+        .min_by_key(|i| due[*i]);
+    if due[0].is_some_and(|at| at <= now) && (previous != Some(Query::Mix) || background.is_none())
+    {
         Some(0)
     } else {
         background
@@ -65,7 +68,7 @@ enum ReadyWork {
     Query(Query),
 }
 fn ready_work(
-    due: &[Instant; 11],
+    due: &[Option<Instant>; 11],
     now: Instant,
     previous: Option<Query>,
     flight: bool,
@@ -81,7 +84,7 @@ fn ready_work(
         Some(ReadyWork::Query(q))
     } else if commands {
         // Saving multiple EQ bands yields to an overdue mix read between bands.
-        if previous == Some(Query::EqBands) && due[0] <= now {
+        if previous == Some(Query::EqBands) && due[0].is_some_and(|at| at <= now) {
             Some(ReadyWork::Query(Query::Mix))
         } else {
             Some(ReadyWork::Write)
@@ -109,12 +112,17 @@ fn query_interval(q: Query) -> Duration {
     })
 }
 fn query_enabled(q: Query, profile: &DeviceProfile) -> bool {
-    match q {
-        Query::Anc if !profile.has_anc => false,
-        Query::Side if !profile.has_sidetone => false,
-        Query::Noise if !profile.has_noise_control => false,
-        _ => true,
+    q.supported_by(profile.capabilities())
+}
+/// None permanently excludes a field. EQ reads and ACKs stay on demand.
+fn initial_deadlines(now: Instant, profile: &DeviceProfile) -> [Option<Instant>; 11] {
+    let mut due = [None; 11];
+    for q in QUERIES {
+        if query_enabled(q, profile) {
+            due[q as usize] = Some(now);
+        }
     }
+    due
 }
 #[derive(Default)]
 struct TraceMeta<'a> {
@@ -254,16 +262,17 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                 let profile = device.profile().clone();
                 let mut state = SoundState {
                     device: Some(profile.display_name.into()),
+                    capabilities: Some(profile.capabilities()),
+                    status: if profile.validated {
+                        String::new()
+                    } else {
+                        "EXPERIMENTAL: guessed device mapping and protocol; hardware unverified."
+                            .into()
+                    },
                     connection: Some("USB Dongle".into()),
                     ..SoundState::default()
                 };
-                let mut due = [Instant::now(); 11];
-                // Disable periodic queries for features this device lacks.
-                for i in 0..11 {
-                    if !query_enabled(QUERIES[i], &profile) {
-                        due[i] = Instant::now() + Duration::from_secs(3600);
-                    }
-                }
+                let mut due = initial_deadlines(Instant::now(), &profile);
                 let mut last_good = Instant::now();
                 let mut waiting: Vec<(Query, Instant, QueuedCommand)> = vec![];
                 let mut flight: Option<(Query, Instant, u64)> = None;
@@ -311,7 +320,7 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                                         } else {
                                             Duration::from_millis(40)
                                         };
-                                    due[q as usize] = write_ready;
+                                    due[q as usize] = Some(write_ready);
                                     pending_readback = Some(q);
                                     waiting.retain(|(_, _, old)| {
                                         !cmd.command.supersedes(&old.command)
@@ -340,7 +349,9 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                             trace.record_with(
                                 "query_due",
                                 Some(q),
-                                scheduled.saturating_duration_since(due[i]),
+                                due[i]
+                                    .map(|at| scheduled.saturating_duration_since(at))
+                                    .unwrap_or_default(),
                                 None,
                                 TraceMeta {
                                     request: Some(request_sequence),
@@ -370,7 +381,9 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                         flight = Some((q, written, request_sequence));
                         previous = Some(q);
                         read_ready = written + Duration::from_millis(25);
-                        due[i] = written + query_interval(q);
+                        if due[i].is_some() {
+                            due[i] = Some(written + query_interval(q));
+                        }
                     }
                     let mut updated_fields = 0u16;
                     let mut received = Instant::now();
@@ -536,8 +549,8 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                             }
                             // A slow secondary query gets a cooldown instead of
                             // repeatedly occupying the queue ahead of the mix dial.
-                            if q != Query::Mix {
-                                due[q as usize] = Instant::now() + Duration::from_secs(1);
+                            if q != Query::Mix && due[q as usize].is_some() {
+                                due[q as usize] = Some(Instant::now() + Duration::from_secs(1));
                             }
                             flight = None;
                         }
@@ -636,7 +649,12 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                         read_ready.min(t + query_timeout(q))
                     } else {
                         let next = if worker.pending.lock().unwrap().is_empty() {
-                            *due[..7].iter().min().unwrap()
+                            due[..QUERIES.len()]
+                                .iter()
+                                .flatten()
+                                .copied()
+                                .min()
+                                .unwrap_or_else(|| Instant::now() + Duration::from_secs(1))
                         } else {
                             Instant::now()
                         };
@@ -690,9 +708,35 @@ pub fn command_matches(c: &Command, s: &SoundState) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn startup_and_long_running_schedule_exclude_unsupported_fields() {
+        let now = Instant::now();
+        let mut profile = DeviceProfile::all_maxwell_profiles()[0].clone();
+        let due = initial_deadlines(now, &profile);
+        assert_eq!(next_query(&due, now, None), Some(Query::Mix as usize));
+        assert!(due[Query::Battery as usize].is_some());
+        assert!(due[Query::EqIndex as usize].is_none());
+        profile.has_anc = false;
+        profile.has_sidetone = false;
+        profile.has_noise_control = false;
+        let mut due = initial_deadlines(now, &profile);
+        let later = now + Duration::from_secs(7200);
+        let mut selected = Vec::new();
+        let mut previous = None;
+        while let Some(i) = next_query(&due, later, previous) {
+            selected.push(QUERIES[i]);
+            previous = Some(QUERIES[i]);
+            due[i] = Some(later + Duration::from_secs(1));
+        }
+        assert_eq!(selected, vec![Query::Mix, Query::Mute, Query::Battery]);
+        for q in [Query::Anc, Query::Side, Query::Level, Query::Noise] {
+            assert!(due[q as usize].is_none());
+            assert!(!q.supported_by(profile.capabilities()));
+        }
+    }
+    #[test]
     fn eq_write_requires_ack_then_readback_without_changing_mix_timing() {
         let now = Instant::now();
-        let due = [now; 11];
+        let due = [Some(now); 11];
         assert_eq!(
             ready_work(
                 &due,
@@ -726,11 +770,11 @@ mod tests {
     #[test]
     fn eq_saves_yield_to_due_mix_and_eq_is_never_polled_when_idle() {
         let now = Instant::now();
-        let mut due = [now + Duration::from_secs(1); 11];
-        due[7] = now;
-        due[8] = now;
+        let mut due = [Some(now + Duration::from_secs(1)); 11];
+        due[7] = Some(now);
+        due[8] = Some(now);
         assert_eq!(next_query(&due, now, None), None);
-        due[0] = now;
+        due[0] = Some(now);
         assert_eq!(
             ready_work(&due, now, Some(Query::EqBands), false, now, None, true),
             Some(ReadyWork::Query(Query::Mix))
@@ -743,7 +787,7 @@ mod tests {
     #[test]
     fn continuous_commands_get_one_readback_before_the_next_write() {
         let start = Instant::now();
-        let due = [start; 11];
+        let due = [Some(start); 11];
         let mut now = start;
         let mut previous = None;
         let mut operations = vec![];
@@ -859,7 +903,7 @@ mod tests {
     #[test]
     fn overdue_background_reads_cannot_queue_ahead_of_mix() {
         let now = Instant::now();
-        let due = [now - Duration::from_secs(1); 11];
+        let due = [Some(now - Duration::from_secs(1)); 11];
         assert_eq!(next_query(&due, now, Some(Query::Anc)), Some(0));
         let background = next_query(&due, now, Some(Query::Mix)).unwrap();
         assert_ne!(background, 0);
@@ -871,7 +915,7 @@ mod tests {
             ),
             Some(0)
         );
-        let future = [now + Duration::from_secs(1); 11];
+        let future = [Some(now + Duration::from_secs(1)); 11];
         assert_eq!(next_query(&future, now, None), None);
     }
 }

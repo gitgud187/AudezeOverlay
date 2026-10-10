@@ -11,6 +11,11 @@ It talks directly to the USB dongle, so **Audeze App can stay closed**.
 [What's new](https://github.com/temdah/AudezeOverlay/releases/latest) ·
 [Documentation](docs/README.md)
 
+**Experimental builds:** the `experimental/multi-model` branch produces clearly
+marked GitHub prereleases. These can be buggy and enable guessed device mappings;
+they do not establish support for additional headsets. Read the warnings and
+current limitations in [the experimental build guide](docs/EXPERIMENTAL.md).
+
 ![Sound overlay with circular game/chat mix, sidetone, ANC and device status](docs/screenshots/sound.png)
 
 *Actual application views with sample data. Screenshots use the public font fallback.*

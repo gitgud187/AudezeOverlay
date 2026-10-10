@@ -318,6 +318,8 @@ pub fn render(painter: &mut Painter, width: u32, height: u32, scale: f32, v: &Vi
             ""
         } else if v.sound.mix.is_none() {
             v.sound.status.as_str()
+        } else if cfg!(feature = "experimental-devices") {
+            "EXPERIMENTAL · may be buggy"
         } else {
             ""
         };
