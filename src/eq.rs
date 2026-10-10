@@ -1,5 +1,6 @@
 //! Fixed-size headset EQ data. Native preset slots are 0..5, custom slots 6..9.
 use serde::{Deserialize, Serialize};
+mod native_names;
 pub const PRESET_NAMES: [&str; 10] = [
     "Audeze",
     "Treble Boost",
@@ -131,6 +132,11 @@ pub struct Draft {
     pub original: Snapshot,
     pub value: Snapshot,
     pub saving: bool,
+    /// Ignore earlier readbacks while committing or restoring a live preview.
+    pub confirmation_revision: u64,
+    pub previewing: bool,
+    /// Includes bands returned to baseline and failed writes, so rollback can retry.
+    pub touched: u16,
 }
 impl Draft {
     pub fn dirty(&self) -> bool {
@@ -138,32 +144,37 @@ impl Draft {
     }
     pub fn set_gain(&mut self, index: usize, gain: f32) {
         if !self.saving && index < 10 && gain.is_finite() {
+            let before = self.value.bands[index];
             let band = &mut self.value.bands[index];
             band.gain = gain.round().clamp(-12., 12.);
             // The native graphic editor uses filter type 6 for edited bands.
             // Untouched bands retain the exact filter type, Q and frequency read.
             band.kind = 6;
+            if *band != before {
+                self.touched |= 1 << index;
+            }
         }
     }
-    pub fn receive(&mut self, snapshot: Snapshot) {
+    pub fn receive(&mut self, snapshot: Snapshot, revision: u64) {
         if snapshot.slot != self.value.slot {
             return;
         }
         if self.saving {
-            let confirmed =
-                self.value
-                    .bands
-                    .iter()
-                    .zip(self.original.bands)
-                    .all(|(target, old)| {
-                        *target == old || snapshot.bands.iter().any(|actual| actual == target)
-                    });
+            if revision < self.confirmation_revision {
+                return;
+            }
+            // The ordered final read completed. A mismatch keeps the baseline
+            // and touched bands for retry, but must not leave controls disabled.
+            self.saving = false;
+            let confirmed = self.value == snapshot;
             if confirmed {
                 self.original = snapshot;
                 self.value = snapshot;
                 self.saving = false;
+                self.previewing = false;
+                self.touched = 0;
             }
-        } else if !self.dirty() {
+        } else if !self.previewing && !self.dirty() {
             self.original = snapshot;
             self.value = snapshot;
         }
@@ -175,6 +186,7 @@ pub struct Editor {
     pub banks: [Option<Draft>; 4],
     pub name_edit: Option<String>,
     pub name_selected: bool,
+    pub preview_slot: Option<u8>,
 }
 impl Editor {
     pub fn draft(&self) -> Option<&Draft> {
@@ -189,22 +201,26 @@ impl Editor {
             .and_then(|i| self.banks.get_mut(i as usize))
             .and_then(Option::as_mut)
     }
-    pub fn receive(&mut self, snapshot: Snapshot) {
+    pub fn receive(&mut self, snapshot: Snapshot, revision: u64) {
         if !(6..=9).contains(&snapshot.slot) {
             return;
         }
         let bank = &mut self.banks[snapshot.slot as usize - 6];
         if let Some(draft) = bank {
-            draft.receive(snapshot);
+            draft.receive(snapshot, revision);
         } else {
             *bank = Some(Draft {
                 original: snapshot,
                 value: snapshot,
                 saving: false,
+                confirmation_revision: 0,
+                previewing: false,
+                touched: 0,
             });
         }
     }
     pub fn failed(&mut self) {
+        self.preview_slot = None;
         for draft in self.banks.iter_mut().flatten() {
             draft.saving = false;
         }
@@ -214,6 +230,54 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_restore_preserves_touched_bands_for_retry() {
+        let mut editor = Editor {
+            selected: 6,
+            ..Default::default()
+        };
+        let baseline = sample(6);
+        editor.receive(baseline, 1);
+        let d = editor.draft_mut().unwrap();
+        d.previewing = true;
+        d.set_gain(0, 3.);
+        let changed = d.value;
+        d.value = baseline;
+        d.saving = true;
+        d.confirmation_revision = 3;
+        editor.receive(changed, 3);
+        let d = editor.draft().unwrap();
+        assert!(!d.saving);
+        assert_eq!(d.value, baseline);
+        assert_eq!(d.touched, 1);
+        assert!(d.previewing);
+        editor.failed();
+        assert_eq!(editor.draft().unwrap().touched, 1);
+    }
+    #[test]
+    fn live_preview_rejects_stale_echo_even_after_returning_to_baseline() {
+        let mut editor = Editor {
+            selected: 6,
+            ..Default::default()
+        };
+        let baseline = sample(6);
+        editor.receive(baseline, 1);
+        let d = editor.draft_mut().unwrap();
+        d.previewing = true;
+        d.set_gain(0, 4.);
+        let stale = d.value;
+        d.set_gain(0, 0.);
+        editor.receive(stale, 2);
+        assert_eq!(editor.draft().unwrap().value, baseline);
+        let d = editor.draft_mut().unwrap();
+        d.saving = true;
+        d.confirmation_revision = 5;
+        editor.receive(baseline, 4);
+        assert!(editor.draft().unwrap().saving);
+        editor.receive(baseline, 5);
+        assert!(!editor.draft().unwrap().saving);
+        assert!(!editor.draft().unwrap().previewing);
+    }
     #[test]
     fn typed_commands_preserve_q_and_frequency_and_reject_factory_writes() {
         let mut band = sample(6).bands[4];
@@ -234,16 +298,17 @@ mod tests {
             ..Default::default()
         };
         let original = sample(6);
-        editor.receive(original);
+        editor.receive(original, 0);
         editor.draft_mut().unwrap().set_gain(2, 5.);
-        editor.receive(original);
+        editor.receive(original, 0);
         assert_eq!(editor.draft().unwrap().value.bands[2].gain, 5.);
         let draft = editor.draft_mut().unwrap();
         draft.saving = true;
+        draft.confirmation_revision = 1;
         let target = draft.value;
-        editor.receive(original);
+        editor.receive(original, 0);
         assert!(editor.draft().unwrap().saving);
-        editor.receive(target);
+        editor.receive(target, 1);
         assert!(!editor.draft().unwrap().dirty());
         assert!(!editor.draft().unwrap().saving);
     }

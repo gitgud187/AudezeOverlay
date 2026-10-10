@@ -89,7 +89,7 @@ impl Presentation {
             self.number_started = now;
         }
         let number_progress = if animate && self.previous_mix.is_some() {
-            ease(progress(self.number_started, now, 85))
+            ease(progress(self.number_started, now, 110))
         } else {
             1.
         };

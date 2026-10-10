@@ -31,3 +31,6 @@ __pycache__/
 # Personal review notes do not belong in published history.
 /docs/CODE_REVIEW.md
 /review.md
+
+# Local model continuation notes (not release documentation).
+/handoff doc.md

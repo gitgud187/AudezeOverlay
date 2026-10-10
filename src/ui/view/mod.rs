@@ -25,6 +25,7 @@ pub enum Action {
     ResizeCard(usize),
     CardMenu(usize),
     AddCard,
+    StatusMenu,
     RemoveCard(usize),
     RestoreCard(usize),
     Record,
@@ -152,9 +153,16 @@ pub fn render(painter: &mut Painter, width: u32, height: u32, scale: f32, v: &Vi
     // Layered windows pass completely transparent pixels through before hit
     // testing. A one-alpha header gives dragging a continuous, invisible target.
     c.rect(Box2::new(16., 14., w - 190., 46.), 0x101010, 1. / 255., 0.);
-    c.logo(30., 25., 162.);
-    if v.config.status_icons {
-        cards::status_icons(&mut c, v);
+    let logo_width = (w - if v.edit { 242. } else { 192. }).clamp(36., 162.);
+    if !v.edit || w >= 290. {
+        if logo_width < 110. {
+            c.logo_mark(20., 24.);
+        } else {
+            c.logo(16., 36. - logo_width * 0.075, logo_width);
+        }
+    }
+    if v.config.status_icons && !settings {
+        cards::status_icons(&mut c, &mut hits, v, w);
     }
     if v.demo {
         c.text(
@@ -194,7 +202,7 @@ pub fn render(painter: &mut Painter, width: u32, height: u32, scale: f32, v: &Vi
         let edit = Box2::new(w - 158., 16., 40., 40.);
         button(&mut c, &mut hits, v, edit, "", Action::Edit, v.edit);
         grid_icon(&mut c, edit.x + 11., edit.y + 11., v.edit);
-        if v.edit || v.config.cards.iter().any(|card| !card.visible) {
+        if v.edit {
             let add = Box2::new(w - 208., 16., 40., 40.);
             button(&mut c, &mut hits, v, add, "+", Action::AddCard, false);
         }

@@ -65,16 +65,6 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
                 FG,
                 1.,
             );
-            // A small inset marker rotates with the rim dot, like a physical knob.
-            c.line(
-                &[
-                    (cx + (radius - 19.) * a.cos(), cy + (radius - 19.) * a.sin()),
-                    (cx + (radius - 26.) * a.cos(), cy + (radius - 26.) * a.sin()),
-                ],
-                FG,
-                0.9,
-                2.5,
-            );
             let value = v
                 .sound
                 .mix
@@ -300,7 +290,7 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
                     rect.h,
                 );
                 if weight > 0. {
-                    c.rect(fill, 0xebebeb, 1., 6.);
+                    c.reveal_rect(rect, fill, 0xebebeb, 6.);
                 }
                 let label_bounds = Box2::new(
                     rect.x + padding,
@@ -412,43 +402,58 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
 }
 
 /// Compact vector status indicators; no icon fonts or extra runtime resources.
-pub(super) fn status_icons(c: &mut Canvas, v: &View) {
-    let y = 63.;
+pub(super) fn status_icons(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, width: f32) {
     let ink = if v.sound.mix.is_some() { FG } else { SUB };
-    // USB connection.
-    c.line(&[(36., y + 7.), (36., y - 7.), (32., y - 3.)], ink, 1., 1.6);
-    c.line(&[(36., y - 7.), (40., y - 3.)], ink, 1., 1.6);
-    c.line(&[(36., y + 3.), (42., y), (42., y - 3.)], ink, 1., 1.6);
-    c.circle(36., y + 7., 2., ink, 1.);
+    let row = Box2::new(16., 72., width - 32., 54.);
+    c.text(
+        v.sound.device.as_deref().unwrap_or("Headset disconnected"),
+        Box2::new(row.x, row.y, row.w - if v.edit { 38. } else { 0. }, 24.),
+        16.,
+        ink,
+        true,
+        false,
+    );
+    let step = (row.w / 3.).min(112.);
+    let y = 112.;
+    let x = row.x + 6.;
+    c.line(&[(x, y + 6.), (x, y - 7.), (x - 4., y - 3.)], ink, 1., 1.5);
+    c.line(&[(x, y - 7.), (x + 4., y - 3.)], ink, 1., 1.5);
+    c.line(
+        &[(x, y + 2.), (x + 6., y - 1.), (x + 6., y - 4.)],
+        ink,
+        1.,
+        1.5,
+    );
+    c.circle(x, y + 6., 2., ink, 1.);
     c.text(
         if v.sound.mix.is_some() {
             "USB"
         } else {
             "Offline"
         },
-        Box2::new(48., y - 8., 54., 20.),
-        14.,
+        Box2::new(row.x + 20., y - 8., step - 22., 20.),
+        13.,
         ink,
         true,
         false,
     );
-    // Battery outline and charge fill.
+    let x = row.x + step;
     c.line(
         &[
-            (110., y - 6.),
-            (130., y - 6.),
-            (130., y + 6.),
-            (110., y + 6.),
-            (110., y - 6.),
+            (x, y - 6.),
+            (x + 18., y - 6.),
+            (x + 18., y + 6.),
+            (x, y + 6.),
+            (x, y - 6.),
         ],
         ink,
         1.,
         1.5,
     );
-    c.rect(Box2::new(131., y - 3., 2., 6.), ink, 1., 0.);
+    c.rect(Box2::new(x + 19., y - 3., 2., 6.), ink, 1., 0.);
     if let Some(b) = v.sound.battery {
         c.rect(
-            Box2::new(113., y - 3., 14. * b as f32 / 100., 6.),
+            Box2::new(x + 3., y - 3., 12. * b as f32 / 100., 6.),
             ink,
             1.,
             0.,
@@ -459,41 +464,49 @@ pub(super) fn status_icons(c: &mut Canvas, v: &View) {
             .battery
             .map(|b| format!("{b}%"))
             .unwrap_or_else(|| "—".into()),
-        Box2::new(141., y - 8., 50., 20.),
-        14.,
+        Box2::new(x + 27., y - 8., step - 28., 20.),
+        13.,
         ink,
         true,
         false,
     );
-    // Microphone plus a diagonal stroke when muted.
-    c.rect(Box2::new(202., y - 7., 6., 10.), ink, 1., 3.);
-    c.arc(205., y, 7., 0., 180., ink, 1., 1.4);
+    let x = row.x + step * 2. + 6.;
+    c.rect(Box2::new(x - 3., y - 7., 6., 10.), ink, 1., 3.);
+    c.arc(x, y, 7., 0., 180., ink, 1., 1.4);
     c.line(
         &[
-            (205., y + 7.),
-            (205., y + 10.),
-            (201., y + 10.),
-            (209., y + 10.),
+            (x, y + 7.),
+            (x, y + 10.),
+            (x - 4., y + 10.),
+            (x + 4., y + 10.),
         ],
         ink,
         1.,
         1.4,
     );
     if v.sound.muted == Some(true) {
-        c.line(&[(198., y - 8.), (213., y + 9.)], ink, 1., 1.6);
+        c.line(&[(x - 7., y - 8.), (x + 8., y + 9.)], ink, 1., 1.6);
     }
     c.text(
         match v.sound.muted {
             Some(true) => "Muted",
-            Some(false) => "Mic live",
-            None => "Mic —",
+            Some(false) => "Live",
+            None => "—",
         },
-        Box2::new(222., y - 8., 84., 20.),
-        14.,
+        Box2::new(x + 15., y - 8., step - 21., 20.),
+        13.,
         ink,
         true,
         false,
     );
+    if v.edit {
+        let dots = Box2::new(width - 48., 72., 32., 22.);
+        button(c, hits, v, dots, "•••", Action::StatusMenu, false);
+        hits.push(Hit {
+            rect: row,
+            action: Action::StatusMenu,
+        });
+    }
 }
 
 fn odometer(c: &mut Canvas, r: Box2, size: f32, old: (u8, u8), new: (u8, u8), p: f32) {
@@ -559,23 +572,19 @@ fn odometer(c: &mut Canvas, r: Box2, size: f32, old: (u8, u8), new: (u8, u8), p:
                 );
             } else {
                 let distance = size + 8.;
-                c.text_clipped(
+                c.rolling_text(
                     &a.to_string(),
                     Box2::new(x, r.y + direction * p * distance, cell, r.h),
                     size,
-                    FG,
-                    true,
-                    true,
                     clip,
+                    1.4 * (std::f32::consts::PI * p).sin(),
                 );
-                c.text_clipped(
+                c.rolling_text(
                     &b.to_string(),
                     Box2::new(x, r.y - direction * (1. - p) * distance, cell, r.h),
                     size,
-                    FG,
-                    true,
-                    true,
                     clip,
+                    1.4 * (std::f32::consts::PI * p).sin(),
                 );
             }
         }

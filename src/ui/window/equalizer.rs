@@ -6,7 +6,18 @@ pub(super) unsafe fn receive_eq(app: &mut App) {
         app.eq_editor.failed();
     }
     if let Some(snapshot) = app.sound.eq_bands {
-        app.eq_editor.receive(snapshot);
+        let mismatch = snapshot
+            .slot
+            .checked_sub(6)
+            .and_then(|i| app.eq_editor.banks.get(i as usize))
+            .and_then(Option::as_ref)
+            .is_some_and(|d| {
+                d.saving && app.sound.eq_revision >= d.confirmation_revision && d.value != snapshot
+            });
+        app.eq_editor.receive(snapshot, app.sound.eq_revision);
+        if mismatch {
+            app.note = "The headset did not confirm this EQ. Save or Discard to retry.".into();
+        }
     }
 }
 pub(super) unsafe fn open_eq(app: &mut App) {
@@ -22,6 +33,7 @@ pub(super) unsafe fn inspect_eq(app: &mut App, slot: u8) {
     }
     commit_eq_name(app);
     app.eq_editor.selected = slot;
+    app.eq_editor.preview_slot = None;
     if slot >= 6 {
         send(app, Command::EqLoad(slot));
     }
@@ -32,28 +44,59 @@ pub(super) unsafe fn set_eq_band(app: &mut App, index: usize, y: f32) {
         return;
     };
     let gain = 12. - ((y - hit.rect.y) / hit.rect.h).clamp(0., 1.) * 24.;
-    if let Some(draft) = app.eq_editor.draft_mut() {
-        draft.set_gain(index, gain);
-    }
+    preview_eq_gain(app, index, gain);
     request_draw(app);
 }
-pub(super) unsafe fn save_eq(app: &mut App) {
+/// Coalesce repeated edits to the same band; the USB worker owns pacing/readback.
+pub(super) unsafe fn preview_eq_gain(app: &mut App, index: usize, gain: f32) {
     if app.sound.mix.is_none() {
-        app.note = "Connect the headset, then reload this EQ before saving.".into();
         return;
     }
     let Some(draft) = app.eq_editor.draft_mut() else {
         return;
     };
-    if draft.saving || !draft.dirty() {
+    if draft.saving || index >= 10 {
         return;
     }
-    let target = draft.value;
-    let original = draft.original;
+    let before = draft.value.bands[index];
+    draft.set_gain(index, gain);
+    let band = draft.value.bands[index];
+    let slot = draft.value.slot;
+    if band == before {
+        return;
+    }
+    draft.previewing = true;
+    if app.sound.eq_index != Some(slot) && app.eq_editor.preview_slot != Some(slot) {
+        send(app, Command::EqSelect(slot));
+    }
+    app.eq_editor.preview_slot = Some(slot);
+    send(app, Command::EqGain { slot, band });
+}
+pub(super) unsafe fn save_eq(app: &mut App) {
+    finish_eq_preview(app, false);
+}
+pub(super) unsafe fn discard_eq(app: &mut App) {
+    finish_eq_preview(app, true);
+}
+unsafe fn finish_eq_preview(app: &mut App, discard: bool) {
+    if app.sound.mix.is_none() {
+        app.note = "Reconnect the headset to save or restore this tuning.".into();
+        return;
+    }
+    let Some(draft) = app.eq_editor.draft_mut() else {
+        return;
+    };
+    if draft.saving || (!draft.dirty() && !draft.previewing) {
+        return;
+    }
+    let edited = draft.value;
+    let touched = draft.touched;
+    let target = if discard { draft.original } else { edited };
+    draft.value = target;
     draft.saving = true;
-    // Only modified bands are sent. Each has its own verified readback.
-    for (band, old) in target.bands.into_iter().zip(original.bands) {
-        if band != old {
+    // Re-send the final values to replace any older queued drag target.
+    for band in target.bands {
+        if touched & (1 << band.id) != 0 {
             send(
                 app,
                 Command::EqGain {
@@ -62,6 +105,16 @@ pub(super) unsafe fn save_eq(app: &mut App) {
                 },
             );
         }
+    }
+    // A fresh, ordered readback is the transaction boundary, not a cached value.
+    let revision = app
+        .controller
+        .as_ref()
+        .map(|c| c.send(Command::EqLoad(target.slot)))
+        .unwrap_or(0);
+    app.eq_editor.draft_mut().unwrap().confirmation_revision = revision;
+    if app.demo {
+        receive_eq(app);
     }
 }
 pub(super) unsafe fn commit_eq_name(app: &mut App) {

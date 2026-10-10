@@ -28,7 +28,9 @@ fn read(d: &mut Device, s: &mut SoundState, q: Query) -> Result<(), String> {
 }
 fn main() -> Result<(), String> {
     if std::env::args().any(|s| s == "--worker") {
-        return worker();
+        let result = worker();
+        std::thread::sleep(Duration::from_millis(2200));
+        return result;
     }
     let mut d = Device::open()?;
     let mut s = SoundState::default();
@@ -38,7 +40,7 @@ fn main() -> Result<(), String> {
     if verify {
         let slot = s.eq_index.ok_or("Missing active EQ")?;
         d.set(&Command::EqSelect(slot))?;
-        std::thread::sleep(Duration::from_millis(40));
+        read(&mut d, &mut s, Query::EqSelectAck)?;
         read(&mut d, &mut s, Query::EqIndex)?;
         if s.eq_index != Some(slot) {
             return Err("Active EQ readback mismatch".into());
@@ -91,6 +93,33 @@ fn worker() -> Result<(), String> {
     controller.send(Command::EqRefresh);
     let initial = wait(&|s| s.eq_index.is_some())?;
     println!("Worker active EQ: {:?}", initial.eq_index);
+    if std::env::args().any(|s| s == "--verify-switching") {
+        let original = std::env::args()
+            .find_map(|a| {
+                a.strip_prefix("--restore-slot=")
+                    .and_then(|v| v.parse::<u8>().ok())
+            })
+            .unwrap_or(initial.eq_index.unwrap());
+        let result = (|| -> Result<(), String> {
+            for slot in [if original == 6 { 7 } else { 6 }, original] {
+                controller.clear_error();
+                let start = Instant::now();
+                let revision = controller.send(Command::EqSelect(slot));
+                wait(&|s| s.eq_index == Some(slot) && s.eq_index_revision >= revision)?;
+                println!(
+                    "Switched to slot {slot} in {} ms",
+                    start.elapsed().as_millis()
+                );
+            }
+            Ok(())
+        })();
+        controller.clear_error();
+        let revision = controller.send(Command::EqSelect(original));
+        let restored = wait(&|s| s.eq_index == Some(original) && s.eq_index_revision >= revision);
+        std::thread::sleep(Duration::from_millis(300));
+        restored?;
+        result?;
+    }
     let verify = std::env::args().any(|s| s == "--verify-same-values");
     for slot in 6..=9 {
         println!("Loading slot {slot}");
@@ -101,6 +130,28 @@ fn worker() -> Result<(), String> {
         println!("Loading slot {slot}");
         let revision = controller.send(Command::EqLoad(slot));
         wait(&|s| s.eq_revision >= revision && s.eq_bands == Some(original))?;
+        if slot == 6 && std::env::args().any(|a| a == "--verify-preview") {
+            let mut target = original;
+            target.bands[0].gain = if target.bands[0].gain < 12. {
+                target.bands[0].gain + 1.
+            } else {
+                target.bands[0].gain - 1.
+            };
+            target.bands[0].kind = 6;
+            let revision = controller.send(Command::EqGain {
+                slot,
+                band: target.bands[0],
+            });
+            let changed = wait(&|s| s.eq_revision >= revision && s.eq_bands == Some(target));
+            controller.clear_error();
+            let revision = controller.send(Command::EqGain {
+                slot,
+                band: original.bands[0],
+            });
+            wait(&|s| s.eq_revision >= revision && s.eq_bands == Some(original))?;
+            changed?;
+            println!("Live band change and full original curve restoration verified");
+        }
         if verify {
             let revision = controller.send(Command::EqGain {
                 slot,
@@ -110,7 +161,9 @@ fn worker() -> Result<(), String> {
         }
         println!("Worker slot {slot}: repeated loading and requested readback verified");
     }
-    if shared.lock().unwrap().eq_index != initial.eq_index {
+    if !std::env::args().any(|a| a.starts_with("--restore-slot="))
+        && shared.lock().unwrap().eq_index != initial.eq_index
+    {
         return Err("Active EQ unexpectedly changed".into());
     }
     Ok(())

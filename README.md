@@ -95,8 +95,11 @@ Typed values can use single-millisecond precision while sliders retain steps of 
 preferences, layout and shortcut. It does not change headset sound settings.
 Factory defaults use 70% outer background and 70% card opacity; startup is off.
 
-Device status can appear as icons beneath the logo, a card, or both; choose
-these independently in **Cards & layout**.
+Device status can appear as a fixed model/status row beneath the logo, a card,
+or both; choose these independently in **Cards & layout**. In layout mode,
+**+ → Status row under logo** adds the fixed row and its **…** menu removes it.
+The row reserves its own space and cannot be dragged or resized. The **+**
+button is visible only while editing the layout.
 
 ## Equalizer
 
@@ -105,17 +108,25 @@ opens your pinned quick switches; **Edit** opens the same editor as
 **Settings → Equalizer**. Six factory presets are read-only. Four custom slots
 load their ten existing bands directly from the headset (32 Hz to 16 kHz).
 
-Select a custom slot, drag or scroll band sliders from −12 to +12 dB, then
-press **Save to headset**. Tuning stays in a local draft until saved; **Discard**
-restores the loaded curve and **Flat** prepares a zero-gain curve. **Use EQ**
-activates the selected preset. Changes to an active slot become audible as
-they are saved. Unsaved drafts survive switching between slots during the app
-session, but are not retained after quitting.
+Select a custom slot and drag or scroll band sliders from −12 to +12 dB to
+hear changes live. Editing activates that custom slot. **Save** confirms and
+keeps the final curve; **Discard** writes the pre-edit curve back and checks
+that the headset restored it. **Flat** previews a zero-gain curve. **Use EQ**
+activates the selected preset without editing its bands. Pending drag updates
+are coalesced per band so old slider positions do not queue up.
 
-Click a custom name to rename it; Enter or clicking elsewhere saves, Escape
-cancels. Names and pins are local overlay preferences. Use the pin buttons to
-choose quick switches, and **Include factory EQs** to hide/show the factory
-choices in that menu. EQ curves themselves are stored in the headset.
+Live preview writes the headset's custom bank immediately: it is not a separate
+volatile audio effect. Keep the app open until you Save or Discard. Quitting or
+losing power before Discard leaves the most recently applied curve in the
+headset. Drafts remain available when switching settings pages or hiding to tray.
+
+On startup, default custom labels are imported from the installed Audeze App's
+local settings for the supported ANC dongle, when available. No native app
+process is needed and its files are never modified. Click a custom name to
+rename it; Enter or clicking elsewhere saves, Escape cancels. Overlay renames
+are preserved. Names and pins are PC-local preferences, not headset data.
+Use the pin buttons to choose quick switches, and **Include factory EQs** to
+hide/show factory choices in that menu.
 
 EQ is loaded only when opening or using EQ controls. It adds no continuous
 polling; changes made elsewhere are refreshed when those controls reopen.
@@ -125,12 +136,16 @@ USB requests while the headset stores the change.
 Saving multiple bands yields to overdue mix reads between bands. Routine mix,
 other-sound, and battery polling intervals remain unchanged.
 
-Cards animate between grid positions. The dial expands while held and has an
-inner position marker. Mix digits roll up or down in place like an odometer,
-while the slash stays still. Selection fills follow the direction of the button change.
+Cards animate between grid positions. The dial expands while held. Mix digits
+roll up or down in place with a slight motion blur while the slash stays still.
+Button selection drains the old fill and reveals the new fill over 280 ms;
+the button outline stays stationary.
 Disable **Appearance → Smooth animations** for immediate transitions.
 
 ## Performance and compatibility
+
+See the [measured native-app comparison](docs/PERFORMANCE.md) and reproduce it
+with `tools/compare-performance.ps1`.
 
 A separate USB worker alternates due mix reads with background work (50 ms mix target), checks
 other sound fields once per second, and reads battery every 30 seconds. Commands
@@ -156,7 +171,7 @@ verify live reads and control readbacks; physical button-to-popup timing still
 needs a hands-on headset check.
 Headset-triggered popups appear at full opacity immediately; only manual opening
 uses a fade-in. An already visible dial animates for 70 ms while its numeric
-value uses a fast 85 ms transition. A newly shown dial starts at the received value.
+value uses a fast 110 ms transition. A newly shown dial starts at the received value.
 While dragging the on-screen wheel, the newest target stays visible until its
 own command is confirmed; older queued replies cannot rewind the dial. The
 current frame is drawn before a hidden window reopens.
@@ -257,8 +272,8 @@ To publish a release, set the version in `Cargo.toml`, run `cargo check` to
 update `Cargo.lock`, commit, then push a matching version tag:
 
 ```powershell
-git tag v0.3.1
-git push origin v0.3.1
+git tag v0.4.1
+git push origin v0.4.1
 ```
 
 The tag must match the package version. The workflow publishes the tested

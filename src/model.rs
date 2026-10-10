@@ -22,6 +22,9 @@ pub struct SoundState {
     /// Forces delivery of an explicitly requested bank, even if values are unchanged.
     #[serde(skip)]
     pub eq_revision: u64,
+    /// Selection acknowledgements must not confirm unrelated band drafts.
+    #[serde(skip)]
+    pub eq_index_revision: u64,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct MixTarget {

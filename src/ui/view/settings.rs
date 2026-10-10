@@ -60,7 +60,7 @@ fn row(
         let typed = editing.map(|draft| format!("{} |", draft.text));
         if matches!(key, "hold" | "fade") {
             c.rect(
-                Box2::new(w - 220., y - 4., 182., 28.),
+                Box2::new(w - 220., y + 1., 182., 28.),
                 if editing.is_some() {
                     0x454545
                 } else {
@@ -70,13 +70,13 @@ fn row(
                 5.,
             );
             h.push(Hit {
-                rect: Box2::new(w - 220., y - 4., 182., 28.),
+                rect: Box2::new(w - 220., y + 1., 182., 28.),
                 action: Action::Number(key),
             });
         }
         c.text(
             typed.as_deref().unwrap_or(value),
-            Box2::new(w - 220., y - 2., 182., 24.),
+            Box2::new(w - 220., y + 4., 182., 24.),
             16.,
             FG,
             true,
@@ -96,7 +96,7 @@ fn row(
             action: Action::Slider(key),
         });
     }
-    let divider = y + if numeric { 69. } else { 57. };
+    let divider = y + if numeric { 69. } else { 50. };
     c.line(&[(x, divider), (w - 32., divider)], 0x303030, 1., 1.);
 }
 // A row explicitly describes its geometry, labels and control state.
@@ -270,8 +270,8 @@ pub(super) fn settings_page(
                 v,
                 504.,
                 w,
-                "Status icons under logo",
-                "Show USB, battery and microphone icons. The status card can stay on too.",
+                "Status row under logo",
+                "Fixed model and status icons. Add or remove in layout mode; cannot be moved.",
                 "status-icons",
                 v.config.status_icons,
             );

@@ -189,6 +189,68 @@ impl<'a> Canvas<'a> {
         p.close();
         self.path(&p.finish().unwrap(), color, alpha, None)
     }
+    /// Reveal a fixed rounded button through a straight moving fill boundary.
+    /// The small scratch surface is bounded by the button, not the window.
+    pub fn reveal_rect(&mut self, r: Box2, fill: Box2, color: u32, radius: f32) {
+        if fill.w >= r.w {
+            self.rect(r, color, 1., radius);
+            return;
+        }
+        if fill.w <= 0. {
+            return;
+        }
+        let scale = self.scale;
+        let mut local = Canvas::new(
+            self.painter,
+            (r.w * scale).ceil() as u32,
+            (r.h * scale).ceil() as u32,
+            scale,
+        );
+        local.rect(Box2::new(0., 0., r.w, r.h), color, 1., radius);
+        let width = local.pix.width() as usize;
+        let left = (fill.x - r.x) * scale;
+        let right = left + fill.w * scale;
+        for (i, pixel) in local.pix.pixels_mut().iter_mut().enumerate() {
+            let x = (i % width) as f32 + 0.5;
+            if x < left || x > right {
+                *pixel = tiny_skia::PremultipliedColorU8::TRANSPARENT;
+            }
+        }
+        self.pix.draw_pixmap(
+            (r.x * scale).round() as i32,
+            (r.y * scale).round() as i32,
+            local.pix.as_ref(),
+            &tiny_skia::PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
+    }
+    pub fn rolling_text(&mut self, text: &str, r: Box2, size: f32, clip: Box2, blur: f32) {
+        if blur > 0.05 {
+            for offset in [-blur, blur] {
+                self.text_region(
+                    text,
+                    Box2::new(r.x, r.y + offset, r.w, r.h),
+                    size,
+                    0xf3f3f3,
+                    true,
+                    true,
+                    0.16,
+                    Some(clip),
+                );
+            }
+        }
+        self.text_region(
+            text,
+            r,
+            size,
+            0xf3f3f3,
+            true,
+            true,
+            if blur > 0.05 { 0.84 } else { 1. },
+            Some(clip),
+        );
+    }
     pub fn line(&mut self, pts: &[(f32, f32)], color: u32, alpha: f32, width: f32) {
         if pts.len() < 2 {
             return;
@@ -383,6 +445,21 @@ impl<'a> Canvas<'a> {
                 }
             }
             pen += m.advance_width;
+        }
+    }
+    pub fn logo_mark(&mut self, x: f32, y: f32) {
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(245, 245, 245, 255);
+        let transform = Transform::from_scale(self.scale, self.scale)
+            .post_translate(x * self.scale, y * self.scale);
+        for path in self
+            .painter
+            .logo
+            .iter()
+            .filter(|p| p.bounds().right() < 30.)
+        {
+            self.pix
+                .fill_path(path, &paint, FillRule::Winding, transform, None);
         }
     }
     pub fn logo(&mut self, x: f32, y: f32, width: f32) {

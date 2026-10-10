@@ -68,7 +68,7 @@ impl SelectionMotion {
         animate: bool,
     ) -> SelectionFrame {
         let duration = if animate && self.selected.is_some() {
-            150
+            280
         } else {
             0
         };

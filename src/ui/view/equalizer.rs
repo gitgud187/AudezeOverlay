@@ -204,24 +204,24 @@ pub(super) fn page(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, w: f32) {
                 false,
             );
         }
-        if draft.dirty() && connected && !draft.saving {
+        if (draft.dirty() || draft.previewing) && connected && !draft.saving {
             button(
                 c,
                 hits,
                 v,
                 Box2::new(left + 184., 595., width - 184., 34.),
-                "Save to headset",
+                "Save",
                 Action::EqSave,
                 true,
             );
         }
         c.wrapped_text(
             if draft.saving {
-                "Saving and checking each changed band…"
-            } else if draft.dirty() {
-                "Unsaved tuning. Save writes this custom slot on your headset."
+                "Checking the tuning on your headset…"
+            } else if draft.dirty() || draft.previewing {
+                "Live preview. Save keeps this tuning; Discard restores the previous curve."
             } else {
-                "Tuning loaded from your headset. Saving changes this custom slot."
+                "Drag to hear changes live. Save keeps them; Discard restores this curve."
             },
             Box2::new(left, 640., width, 44.),
             13.,

@@ -39,6 +39,7 @@ pub enum Query {
     EqIndex,
     EqBands,
     EqWriteAck,
+    EqSelectAck,
 }
 /// An incomplete frame holds at most 191 bytes; the next report adds at most 61.
 /// Even at the six-byte minimum frame size, 64 slots cover that bounded input.
@@ -223,7 +224,7 @@ impl Device {
     pub fn query(&mut self, q: Query) -> Result<()> {
         self.eq_read_slot = (q == Query::EqBands).then_some(self.eq_slot);
         self.packet(match q {
-            Query::EqWriteAck => return Ok(()),
+            Query::EqWriteAck | Query::EqSelectAck => return Ok(()),
             Query::EqIndex => &[5, 0x5a, 3, 0, 0x30, 0x2e, 0x0d],
             Query::EqBands => {
                 return self.packet(&[5, 0x5a, 5, 0, 0x30, 0x2e, 0x32, self.eq_slot, 10])
@@ -252,9 +253,10 @@ impl Device {
             _ => (),
         }
         let (q, body) = match c {
-            Command::EqSelect(slot) if *slot < 10 => {
-                (Query::EqIndex, vec![5, 0x5a, 4, 0, 0x30, 0x2e, 0x0c, *slot])
-            }
+            Command::EqSelect(slot) if *slot < 10 => (
+                Query::EqSelectAck,
+                vec![5, 0x5a, 4, 0, 0x30, 0x2e, 0x0c, *slot],
+            ),
             Command::Mix(p) if *p <= 100 => (
                 Query::Mix,
                 vec![
@@ -435,6 +437,9 @@ pub fn parse_frame(b: &[u8], s: &mut SoundState) -> Option<Query> {
             }
             _ => return None,
         },
+        (0x30, 0x2e) if b.len() == 9 && b[6] == 0x0c && b[7] == 0 && b[8] == 0 => {
+            Query::EqSelectAck
+        }
         (0x30, 0x2e) if b.len() == 9 && b[6] == 0x0b && b[7] == 0 && b[8] == 0 => Query::EqWriteAck,
         (0x30, 0x2e) if b.len() == 9 && b[6] == 0x0d && b[7] == 0 && b[8] < 10 => {
             s.eq_index = Some(b[8]);

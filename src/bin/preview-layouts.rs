@@ -19,6 +19,7 @@ fn main() {
         eq_index: Some(0),
         eq_bands: None,
         eq_revision: 0,
+        eq_index_revision: 0,
         mix: Some((50, 50)),
         sidetone: Some(false),
         sidetone_level: Some(26),
@@ -79,9 +80,18 @@ fn main() {
     minimum.cards[4].y = 8;
     minimum.cards[5].y = 9;
     minimum.resize_canvas(440, 440);
+    let mut column = minimum.clone();
+    let mut y = 0;
+    for card in &mut column.cards {
+        card.x = 0;
+        card.y = y;
+        y += card.h;
+    }
+    column.trim_canvas();
     let mut large_text = minimum.clone();
     large_text.text_scale = 140;
     for (name, config) in [
+        ("single-column-status", column),
         ("minimum-cards", minimum),
         ("minimum-large-text", large_text),
         ("compact", base),
@@ -102,7 +112,7 @@ fn main() {
             recorded_key: None,
             number_edit: None,
             mix: 50.,
-            demo: true,
+            demo: false,
             monitor_label: "Automatic",
             drag_preview: None,
             animation: None,
@@ -149,7 +159,7 @@ fn main() {
         selected: 6,
         ..Default::default()
     };
-    eq_editor.receive(audeze_overlay::eq::sample(6));
+    eq_editor.receive(audeze_overlay::eq::sample(6), 0);
     let draft = audeze_overlay::input::NumberDraft::new("hold", 797);
     for (name, section) in [
         ("equalizer", Some(5)),
@@ -199,7 +209,7 @@ fn main() {
     let mut after = before.clone();
     after.mix = Some((20, 80));
     after.anc = Some("Transparency".into());
-    for millis in [0, 45, 90, 160] {
+    for millis in [0, 45, 90, 160, 300] {
         let frame = motion.frame(
             boxes,
             &after,
@@ -228,7 +238,7 @@ fn main() {
             .pix
             .save_png(format!("diagnostics/layout-motion-{millis}.png"))
             .unwrap();
-        if millis == 160 {
+        if millis == 300 {
             assert!(!frame.active, "Animations must stop when idle");
         }
     }

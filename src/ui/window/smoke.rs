@@ -282,6 +282,19 @@ pub(super) unsafe fn smoke(app: &mut App) {
                 "header_status_preserves_card_sizes".into(),
                 app.config.status_icons && app.config.cards == size_before,
             ));
+            app.settings = None;
+            app.edit = true;
+            render(app);
+            app.checks.push((
+                "fixed_status_row_has_remove_target".into(),
+                app.hits.iter().any(|h| h.action == Action::StatusMenu),
+            ));
+            app.edit = false;
+            render(app);
+            app.checks.push((
+                "add_button_only_in_layout_mode".into(),
+                !app.hits.iter().any(|h| h.action == Action::AddCard),
+            ));
             act(app, Action::EqEditor, 0., 0.);
             act(app, Action::EqInspect(6), 0., 0.);
             render(app);
@@ -294,11 +307,18 @@ pub(super) unsafe fn smoke(app: &mut App) {
                     == 10,
             ));
             let eq_before = app.sound.eq_bands;
-            app.eq_editor.draft_mut().unwrap().set_gain(2, 4.);
+            preview_eq_gain(app, 2, 4.);
             app.checks.push((
-                "eq_tuning_is_local_until_save".into(),
-                app.sound.eq_bands == eq_before,
+                "eq_drag_previews_live".into(),
+                app.sound.eq_bands.unwrap().bands[2].gain == 4.
+                    && app.eq_editor.draft().unwrap().dirty(),
             ));
+            act(app, Action::EqDiscard, 0., 0.);
+            app.checks.push((
+                "eq_discard_restores_headset".into(),
+                app.sound.eq_bands == eq_before && !app.eq_editor.draft().unwrap().dirty(),
+            ));
+            preview_eq_gain(app, 2, 4.);
             act(app, Action::EqSave, 0., 0.);
             app.checks.push((
                 "eq_save_confirms_draft".into(),

@@ -104,8 +104,10 @@ as an ordinary CI test.
 
 The headset owns four custom EQ banks. `SoundState` carries the latest read bank,
 while `eq::Editor` keeps up to four independent drafts in the UI. Loading another
-bank never overwrites an unsaved draft. Only Save emits typed band commands;
-readbacks of every changed band must match the target before a draft is marked
-saved. Untouched bands refresh from the latest readback. EQ
+bank never overwrites an unsaved draft. Live gestures emit coalesced band commands.
+Save confirms the final curve, and Discard writes the baseline back. Both finish
+only after an ordered bank readback matches; touched-band tracking makes failed
+restoration retryable even when the displayed draft has returned to baseline.
+Selection and band confirmations have separate sequence numbers. EQ
 queries are on demand and excluded from routine polling. Reads and writes use
 different gain/Q byte order, covered by protocol tests and hardware diagnostics.

@@ -76,7 +76,7 @@ impl Default for Config {
 impl Config {
     pub fn card_top(&self) -> f32 {
         if self.status_icons {
-            98.
+            142.
         } else {
             74.
         }
@@ -90,9 +90,9 @@ impl Config {
             .max(160.) as u32
     }
     pub fn minimum_width(&self) -> u32 {
-        (24. + crate::layout::extent(&self.cards).0 as f32 * self.cell_width)
+        (24. + crate::layout::extent(&self.cards).0.max(5) as f32 * self.cell_width)
             .ceil()
-            .max(440.) as u32
+            .max(232.) as u32
     }
     pub fn canvas_cells(&self, width: f32, height: f32) -> (i32, i32) {
         (
@@ -148,7 +148,7 @@ impl Config {
         }
         c.duration_ms = c.duration_ms.clamp(500, 10000);
         c.fade_ms = c.fade_ms.min(1000);
-        c.width = c.width.clamp(400, 3200);
+        c.width = c.width.clamp(232, 3200);
         c.height = c.height.clamp(160, 2400);
         c.text_scale = c.text_scale.clamp(100, 140);
         c.background_opacity = c.background_opacity.min(100);
@@ -181,6 +181,7 @@ impl Config {
             c.cards = crate::layout::defaults();
         }
         c.settings_page = c.settings_page.min(5);
+        c.eq.import_native_names();
         c.fit_layout();
         c
     }

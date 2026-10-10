@@ -147,6 +147,10 @@ pub(super) unsafe fn card_menu(app: &mut App, index: Option<usize>) {
                 any = true;
             }
         }
+        if !app.config.status_icons {
+            let _ = AppendMenuW(menu, MF_STRING, 7, w!("Status row under logo"));
+            any = true;
+        }
         if !any {
             let _ = AppendMenuW(
                 menu,
@@ -169,7 +173,13 @@ pub(super) unsafe fn card_menu(app: &mut App, index: Option<usize>) {
     )
     .0;
     let _ = DestroyMenu(menu);
-    if (1..=6).contains(&id) {
+    if id == 7 {
+        setting(app, "status-icons", 0);
+        app.config.fit_layout();
+        save(app);
+        position(app);
+        request_draw(app);
+    } else if (1..=6).contains(&id) {
         let i = id as usize - 1;
         act(
             app,

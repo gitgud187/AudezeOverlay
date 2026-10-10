@@ -258,8 +258,8 @@ pub(super) unsafe fn dispatch(
                         save(app);
                     }
                     Action::EqBand(index) => {
-                        if let Some(d) = app.eq_editor.draft_mut() {
-                            d.set_gain(index, d.value.bands[index].gain + steps as f32);
+                        if let Some(d) = app.eq_editor.draft() {
+                            preview_eq_gain(app, index, d.value.bands[index].gain + steps as f32);
                         }
                         request_draw(app);
                     }
