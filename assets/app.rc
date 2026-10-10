@@ -1,0 +1,26 @@
+#include <winver.h>
+
+1 ICON "audeze.ico"
+
+1 VERSIONINFO
+FILEVERSION APP_VERSION_NUM
+PRODUCTVERSION APP_VERSION_NUM
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "Audeze Overlay\0"
+            VALUE "FileVersion", APP_VERSION "\0"
+            VALUE "ProductName", "Audeze Overlay\0"
+            VALUE "ProductVersion", APP_VERSION "\0"
+            VALUE "OriginalFilename", "audeze-overlay.exe\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

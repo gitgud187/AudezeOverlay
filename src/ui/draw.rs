@@ -1,0 +1,409 @@
+//! CPU rasterization at the final display resolution, with independent alpha.
+use fontdue::{Font, FontSettings, Metrics};
+use std::{collections::HashMap, path::PathBuf};
+use tiny_skia::*;
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Box2 {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+impl Box2 {
+    pub fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
+        Self { x, y, w, h }
+    }
+    pub fn contains(self, x: f32, y: f32) -> bool {
+        x >= self.x && y >= self.y && x < self.x + self.w && y < self.y + self.h
+    }
+    pub fn inset(self, n: f32) -> Self {
+        Self::new(self.x + n, self.y + n, self.w - 2. * n, self.h - 2. * n)
+    }
+}
+pub struct Painter {
+    pub fonts: [Font; 2],
+    glyphs: HashMap<(char, u16, bool), (Metrics, Vec<u8>)>,
+    pub logo: Vec<Path>,
+}
+pub struct Canvas<'a> {
+    pub pix: Pixmap,
+    pub scale: f32,
+    pub painter: &'a mut Painter,
+}
+pub fn asset(name: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    [
+        exe.join("assets").join(name),
+        PathBuf::from("assets/local").join(name),
+    ]
+    .into_iter()
+    .find(|p| p.exists())
+}
+impl Painter {
+    pub fn new() -> Self {
+        let load = |name: &str, fallback: &str| {
+            asset(name)
+                .and_then(|p| std::fs::read(p).ok())
+                .and_then(|b| Font::from_bytes(b, FontSettings::default()).ok())
+                .unwrap_or_else(|| {
+                    Font::from_bytes(
+                        std::fs::read(fallback).expect("Windows UI font"),
+                        FontSettings::default(),
+                    )
+                    .expect("Valid UI font")
+                })
+        };
+        // The installed Demi Bold file is a demo font whose punctuation draws a
+        // watermark. Use the complete Medium face for a consistent, valid glyph set.
+        let fonts = [
+            load(
+                "connary fagen - visby cf medium.otf",
+                r"C:\Windows\Fonts\segoeui.ttf",
+            ),
+            load(
+                "connary fagen - visby cf medium.otf",
+                r"C:\Windows\Fonts\seguisb.ttf",
+            ),
+        ];
+        let mut logo = vec![];
+        {
+            // Keep the standalone executable and its tray icon complete.
+            let xml = asset("logo-wide.svg")
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .unwrap_or_else(|| include_str!("../../assets/logo-wide.svg").into());
+            for part in xml.split(" d=\"").skip(1) {
+                if let Some(d) = part.split('"').next() {
+                    let mut pb = PathBuilder::new();
+                    let (mut x, mut y) = (0., 0.);
+                    for seg in svgtypes::PathParser::from(d).flatten() {
+                        use svgtypes::PathSegment::*;
+                        match seg {
+                            MoveTo { abs, x: a, y: b } => {
+                                x = if abs { a } else { x + a };
+                                y = if abs { b } else { y + b };
+                                pb.move_to(x as f32, y as f32)
+                            }
+                            LineTo { abs, x: a, y: b } => {
+                                x = if abs { a } else { x + a };
+                                y = if abs { b } else { y + b };
+                                pb.line_to(x as f32, y as f32)
+                            }
+                            HorizontalLineTo { abs, x: a } => {
+                                x = if abs { a } else { x + a };
+                                pb.line_to(x as f32, y as f32)
+                            }
+                            VerticalLineTo { abs, y: b } => {
+                                y = if abs { b } else { y + b };
+                                pb.line_to(x as f32, y as f32)
+                            }
+                            CurveTo {
+                                abs,
+                                x1,
+                                y1,
+                                x2,
+                                y2,
+                                x: a,
+                                y: b,
+                            } => {
+                                let (ox, oy) = if abs { (0., 0.) } else { (x, y) };
+                                pb.cubic_to(
+                                    (x1 + ox) as f32,
+                                    (y1 + oy) as f32,
+                                    (x2 + ox) as f32,
+                                    (y2 + oy) as f32,
+                                    (a + ox) as f32,
+                                    (b + oy) as f32,
+                                );
+                                x = a + ox;
+                                y = b + oy;
+                            }
+                            ClosePath { .. } => pb.close(),
+                            _ => (),
+                        }
+                    }
+                    if let Some(p) = pb.finish() {
+                        logo.push(p);
+                    }
+                }
+            }
+        }
+        Self {
+            fonts,
+            glyphs: HashMap::new(),
+            logo,
+        }
+    }
+}
+impl<'a> Canvas<'a> {
+    pub fn new(painter: &'a mut Painter, w: u32, h: u32, scale: f32) -> Self {
+        Self {
+            pix: Pixmap::new(w, h).unwrap(),
+            scale,
+            painter,
+        }
+    }
+    pub fn path(&mut self, path: &Path, color: u32, alpha: f32, stroke: Option<f32>) {
+        let mut p = Paint::default();
+        p.set_color_rgba8(
+            (color >> 16) as u8,
+            (color >> 8) as u8,
+            color as u8,
+            (alpha.clamp(0., 1.) * 255.).round() as u8,
+        );
+        let t = Transform::from_scale(self.scale, self.scale);
+        if let Some(w) = stroke {
+            self.pix.stroke_path(
+                path,
+                &p,
+                &Stroke {
+                    width: w,
+                    line_cap: LineCap::Round,
+                    line_join: LineJoin::Round,
+                    ..Default::default()
+                },
+                t,
+                None,
+            )
+        } else {
+            self.pix.fill_path(path, &p, FillRule::Winding, t, None)
+        }
+    }
+    pub fn rect(&mut self, r: Box2, color: u32, alpha: f32, radius: f32) {
+        if r.w <= 0. || r.h <= 0. {
+            return;
+        }
+        let n = radius.min(r.w / 2.).min(r.h / 2.);
+        let (x, y, w, h) = (r.x, r.y, r.w, r.h);
+        // Circular quarter arcs, matching the native rounded window region.
+        let k = n * 0.552_284_8;
+        let mut p = PathBuilder::new();
+        p.move_to(x + n, y);
+        p.line_to(x + w - n, y);
+        p.cubic_to(x + w - n + k, y, x + w, y + n - k, x + w, y + n);
+        p.line_to(x + w, y + h - n);
+        p.cubic_to(x + w, y + h - n + k, x + w - n + k, y + h, x + w - n, y + h);
+        p.line_to(x + n, y + h);
+        p.cubic_to(x + n - k, y + h, x, y + h - n + k, x, y + h - n);
+        p.line_to(x, y + n);
+        p.cubic_to(x, y + n - k, x + n - k, y, x + n, y);
+        p.close();
+        self.path(&p.finish().unwrap(), color, alpha, None)
+    }
+    pub fn line(&mut self, pts: &[(f32, f32)], color: u32, alpha: f32, width: f32) {
+        if pts.len() < 2 {
+            return;
+        }
+        let mut p = PathBuilder::new();
+        p.move_to(pts[0].0, pts[0].1);
+        for &(x, y) in &pts[1..] {
+            p.line_to(x, y)
+        }
+        self.path(&p.finish().unwrap(), color, alpha, Some(width));
+    }
+    pub fn circle(&mut self, x: f32, y: f32, r: f32, color: u32, alpha: f32) {
+        if let Some(p) = PathBuilder::from_circle(x, y, r) {
+            self.path(&p, color, alpha, None)
+        }
+    }
+    // Immediate-mode drawing keeps geometry and paint parameters explicit.
+    #[allow(clippy::too_many_arguments)]
+    pub fn arc(
+        &mut self,
+        x: f32,
+        y: f32,
+        r: f32,
+        from: f32,
+        to: f32,
+        color: u32,
+        alpha: f32,
+        width: f32,
+    ) {
+        let steps = ((to - from).abs() / 3.).ceil().max(1.) as usize;
+        let pts: Vec<_> = (0..=steps)
+            .map(|i| {
+                let a = (from + (to - from) * i as f32 / steps as f32).to_radians();
+                (x + r * a.cos(), y + r * a.sin())
+            })
+            .collect();
+        self.line(&pts, color, alpha, width)
+    }
+    pub fn wrapped_text(&mut self, text: &str, r: Box2, size: f32, color: u32) {
+        let mut line = String::new();
+        let mut y = r.y;
+        for word in text.split_whitespace() {
+            let candidate = if line.is_empty() {
+                word.to_owned()
+            } else {
+                format!("{line} {word}")
+            };
+            let width: f32 = candidate
+                .chars()
+                .map(|ch| {
+                    self.painter.fonts[0]
+                        .metrics(ch, size * self.scale)
+                        .advance_width
+                        / self.scale
+                })
+                .sum();
+            if width > r.w && !line.is_empty() {
+                self.text(
+                    &line,
+                    Box2::new(r.x, y, r.w, size + 4.),
+                    size,
+                    color,
+                    false,
+                    false,
+                );
+                y += size + 4.;
+                line = word.into();
+                if y + size > r.y + r.h {
+                    return;
+                }
+            } else {
+                line = candidate;
+            }
+        }
+        self.text(
+            &line,
+            Box2::new(r.x, y, r.w, size + 4.),
+            size,
+            color,
+            false,
+            false,
+        );
+    }
+    pub fn text(&mut self, text: &str, r: Box2, size: f32, color: u32, bold: bool, center: bool) {
+        self.text_alpha(text, r, size, color, bold, center, 1.);
+    }
+    // Immediate-mode drawing keeps geometry and paint parameters explicit.
+    #[allow(clippy::too_many_arguments)]
+    pub fn text_alpha(
+        &mut self,
+        text: &str,
+        r: Box2,
+        size: f32,
+        color: u32,
+        bold: bool,
+        center: bool,
+        opacity: f32,
+    ) {
+        self.text_region(text, r, size, color, bold, center, opacity, None);
+    }
+    // Immediate-mode drawing keeps geometry and paint parameters explicit.
+    #[allow(clippy::too_many_arguments)]
+    pub fn text_clipped(
+        &mut self,
+        text: &str,
+        r: Box2,
+        size: f32,
+        color: u32,
+        bold: bool,
+        center: bool,
+        clip: Box2,
+    ) {
+        self.text_region(text, r, size, color, bold, center, 1., Some(clip));
+    }
+    // Immediate-mode drawing keeps geometry and paint parameters explicit.
+    #[allow(clippy::too_many_arguments)]
+    fn text_region(
+        &mut self,
+        text: &str,
+        r: Box2,
+        size: f32,
+        color: u32,
+        bold: bool,
+        center: bool,
+        opacity: f32,
+        clip: Option<Box2>,
+    ) {
+        if r.w <= 0. || text.is_empty() {
+            return;
+        }
+        let px = (size * self.scale).round().max(1.) as u16;
+        let f = &self.painter.fonts[usize::from(bold)];
+        let max = r.w * self.scale;
+        let mut chars = String::new();
+        let mut total = 0.;
+        for c in text.chars() {
+            let w = f.metrics(c, px as f32).advance_width;
+            if total + w > max {
+                while !chars.is_empty() && total + f.metrics('…', px as f32).advance_width > max {
+                    let c = chars.pop().unwrap();
+                    total -= f.metrics(c, px as f32).advance_width;
+                }
+                chars.push('…');
+                total += f.metrics('…', px as f32).advance_width;
+                break;
+            }
+            chars.push(c);
+            total += w;
+        }
+        let mut pen = r.x * self.scale + if center { (max - total) / 2. } else { 0. };
+        let baseline = r.y * self.scale
+            + f.horizontal_line_metrics(px as f32)
+                .map(|m| m.ascent)
+                .unwrap_or(px as f32);
+        for c in chars.chars() {
+            let (m, b) =
+                self.painter.glyphs.entry((c, px, bold)).or_insert_with(|| {
+                    self.painter.fonts[usize::from(bold)].rasterize(c, px as f32)
+                });
+            let left = pen.round() as i32 + m.xmin;
+            let top = (baseline - m.height as f32 - m.ymin as f32).round() as i32;
+            let width = self.pix.width() as i32;
+            let height = self.pix.height() as i32;
+            for yy in 0..m.height {
+                let y = top + yy as i32;
+                if y < 0 || y >= height {
+                    continue;
+                }
+                for xx in 0..m.width {
+                    let x = left + xx as i32;
+                    if x < 0 || x >= width {
+                        continue;
+                    }
+                    if clip.is_some_and(|bounds| {
+                        !bounds.contains(x as f32 / self.scale, y as f32 / self.scale)
+                    }) {
+                        continue;
+                    }
+                    let a = (b[yy * m.width + xx] as f32 * opacity.clamp(0., 1.)).round() as u32;
+                    if a == 0 {
+                        continue;
+                    }
+                    let at = ((y * width + x) * 4) as usize;
+                    let dst = &mut self.pix.data_mut()[at..at + 4];
+                    for (i, chan) in [(color >> 16) & 255, (color >> 8) & 255, color & 255]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        dst[i] = ((chan * a + dst[i] as u32 * (255 - a) + 127) / 255) as u8;
+                    }
+                    dst[3] = (a + (dst[3] as u32 * (255 - a) + 127) / 255).min(255) as u8;
+                }
+            }
+            pen += m.advance_width;
+        }
+    }
+    pub fn logo(&mut self, x: f32, y: f32, width: f32) {
+        if self.painter.logo.is_empty() {
+            self.text(
+                "AUDEZE",
+                Box2::new(x, y, width, 30.),
+                22.,
+                0xffffff,
+                true,
+                false,
+            );
+            return;
+        }
+        let mut p = Paint::default();
+        p.set_color_rgba8(245, 245, 245, 255);
+        let scale = width / 150.;
+        let t = Transform::from_scale(scale * self.scale, scale * self.scale)
+            .post_translate(x * self.scale, y * self.scale);
+        for path in &self.painter.logo {
+            self.pix.fill_path(path, &p, FillRule::Winding, t, None);
+        }
+    }
+}

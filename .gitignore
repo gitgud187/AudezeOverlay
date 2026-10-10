@@ -1,0 +1,33 @@
+# Rust outputs and local build tools. Keep Cargo.lock for reproducible app builds.
+/target/
+/.tools/
+/diagnostics/
+/dist/
+*.log
+/assets/local/
+/usb-timing.csv
+
+# Editor, OS and local agent state
+/.idea/
+/.vs/
+/.codex/
+*.user
+*.swp
+.DS_Store
+Thumbs.db
+Desktop.ini
+__pycache__/
+*.pyc
+
+# Local credentials and signing material
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.pem
+*.key
+
+# Personal review notes do not belong in published history.
+/docs/CODE_REVIEW.md
+/review.md

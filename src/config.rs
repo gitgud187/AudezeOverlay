@@ -1,0 +1,338 @@
+use serde::{Deserialize, Serialize};
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Config {
+    pub hotkey_mod: u32,
+    pub hotkey_vk: u32,
+    pub duration_ms: u32,
+    pub fade_ms: u32,
+    pub position: Option<(i32, i32)>,
+    pub auto_show: bool,
+    pub width: u32,
+    pub height: u32,
+    pub text_scale: u32,
+    pub background_opacity: u8,
+    pub card_opacity: u8,
+    pub background_blur: bool,
+    pub cards: [crate::layout::Card; 5],
+    pub grid_rows: i32,
+    pub grid_columns: i32,
+    pub cell_width: f32,
+    pub cell_height: f32,
+    #[serde(default)]
+    pub layout_version: u8,
+    pub notify: [bool; 5],
+    pub monitor: String,
+    pub snap: bool,
+    pub locked: bool,
+    pub autostart: bool,
+    pub low_battery: u8,
+    pub animations: bool,
+    pub settings_page: usize,
+}
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            hotkey_mod: 1,
+            hotkey_vk: 0x24,
+            duration_ms: 2500,
+            fade_ms: 180,
+            position: None,
+            auto_show: true,
+            width: 710,
+            height: 548,
+            text_scale: 100,
+            background_opacity: 70,
+            card_opacity: 70,
+            background_blur: true,
+            cards: crate::layout::defaults(),
+            grid_rows: 15,
+            grid_columns: 12,
+            cell_width: 57.116_665,
+            cell_height: 30.493_206,
+            layout_version: 2,
+            notify: [true; 5],
+            monitor: String::new(),
+            snap: true,
+            locked: false,
+            autostart: false,
+            low_battery: 20,
+            animations: true,
+            settings_page: 0,
+        }
+    }
+}
+impl Config {
+    pub fn minimum_height(&self) -> u32 {
+        (90. + crate::layout::extent(&self.cards).1 as f32 * self.cell_height)
+            .ceil()
+            .max(160.) as u32
+    }
+    pub fn minimum_width(&self) -> u32 {
+        (24. + crate::layout::extent(&self.cards).0 as f32 * self.cell_width)
+            .ceil()
+            .max(440.) as u32
+    }
+    pub fn canvas_cells(&self, width: f32, height: f32) -> (i32, i32) {
+        (
+            ((width - 24.) / self.cell_width + 0.001)
+                .floor()
+                .clamp(1., 80.) as i32,
+            ((height - 90.) / self.cell_height + 0.001)
+                .floor()
+                .clamp(1., 80.) as i32,
+        )
+    }
+    pub fn resize_canvas(&mut self, width: u32, height: u32) {
+        self.width = width.max(self.minimum_width()).min(3200);
+        self.height = height.max(self.minimum_height()).min(2400);
+        (self.grid_columns, self.grid_rows) =
+            self.canvas_cells(self.width as f32, self.height as f32);
+    }
+    pub fn trim_canvas(&mut self) {
+        crate::layout::compact(&mut self.cards);
+        self.resize_canvas(self.minimum_width(), self.minimum_height());
+    }
+    pub fn restore_card(&mut self, index: usize) -> bool {
+        if let Some(rows) =
+            crate::layout::restore(&mut self.cards, index, self.grid_columns, self.grid_rows)
+        {
+            self.height = self
+                .height
+                .max((90. + rows as f32 * self.cell_height).ceil() as u32);
+            self.fit_layout();
+            true
+        } else {
+            false
+        }
+    }
+    pub fn fit_layout(&mut self) {
+        self.resize_canvas(self.width, self.height);
+    }
+    pub fn path() -> PathBuf {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("AudezeOverlay")
+            .join("settings.json")
+    }
+    pub fn load() -> Self {
+        let mut c: Self = fs::read(Self::path())
+            .ok()
+            .and_then(|d| serde_json::from_slice(&d).ok())
+            .unwrap_or_default();
+        if !valid_hotkey(c.hotkey_mod, c.hotkey_vk) {
+            c.hotkey_mod = 1;
+            c.hotkey_vk = 0x24;
+        }
+        c.duration_ms = c.duration_ms.clamp(500, 10000);
+        c.fade_ms = c.fade_ms.min(1000);
+        c.width = c.width.clamp(400, 3200);
+        c.height = c.height.clamp(160, 2400);
+        c.text_scale = c.text_scale.clamp(100, 140);
+        c.background_opacity = c.background_opacity.min(100);
+        c.card_opacity = c.card_opacity.clamp(10, 100);
+        c.grid_rows = c.grid_rows.clamp(1, 80);
+        c.migrate_layout();
+        c.low_battery = c.low_battery.min(50);
+        for i in 0..5 {
+            let card = c.cards[i];
+            if !card.visible {
+                continue;
+            }
+            let (w, h) = crate::layout::minimum(i);
+            if card.x < 0
+                || card.y < 0
+                || card.w < w
+                || card.h < h
+                || card.x + card.w > c.grid_columns
+                || card.y + card.h > c.grid_rows
+            {
+                c.cards = crate::layout::defaults();
+                break;
+            }
+        }
+        if (0..5).any(|i| {
+            (i + 1..5).any(|j| {
+                c.cards[i].visible && c.cards[j].visible && c.cards[i].overlaps(c.cards[j])
+            })
+        }) {
+            c.cards = crate::layout::defaults();
+        }
+        c.settings_page = c.settings_page.min(4);
+        c.fit_layout();
+        c
+    }
+    pub fn migrate_layout(&mut self) {
+        if self.layout_version == 0 {
+            self.cell_width = (self.width as f32 - 24.) / 12.;
+            self.cell_height = (self.height as f32 - 106.) / self.grid_rows.max(1) as f32;
+            self.grid_columns = 12;
+            self.layout_version = 1;
+        }
+        if self.layout_version == 1 {
+            self.height = self.height.saturating_sub(16);
+            self.layout_version = 2;
+        }
+        if !self.cell_width.is_finite() {
+            self.cell_width = 596. / 12.;
+        }
+        if !self.cell_height.is_finite() {
+            self.cell_height = 394. / 15.;
+        }
+        self.cell_width = self.cell_width.clamp(41.3333, 200.);
+        self.cell_height = self.cell_height.clamp(26., 100.);
+        self.grid_columns = self.grid_columns.clamp(5, 80);
+    }
+    pub fn save(&self) -> std::io::Result<()> {
+        self.save_to(&Self::path())
+    }
+    fn save_to(&self, path: &Path) -> std::io::Result<()> {
+        fs::create_dir_all(path.parent().unwrap())?;
+        let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
+        let bytes = serde_json::to_vec_pretty(self)?;
+        let result = (|| {
+            let mut file = fs::File::create(&temporary)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            drop(file);
+            fs::rename(&temporary, path)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(temporary);
+        }
+        result
+    }
+    pub fn hotkey_label(&self) -> String {
+        hotkey_label(self.hotkey_mod, self.hotkey_vk)
+    }
+}
+pub fn valid_hotkey(mods: u32, vk: u32) -> bool {
+    matches!(mods, 0 | 1 | 2 | 4)
+        && (0x08..=0xfe).contains(&vk)
+        && !matches!(vk,0x10..=0x12|0x1b|0x5b..=0x5c|0x7b|0xa0..=0xa5)
+}
+pub fn hotkey_label(mods: u32, vk: u32) -> String {
+    let prefix = match mods {
+        1 => "Alt + ",
+        2 => "Ctrl + ",
+        4 => "Shift + ",
+        _ => "",
+    };
+    let key = match vk {
+        0x24 => "Home".into(),
+        0x23 => "End".into(),
+        0x21 => "Page Up".into(),
+        0x22 => "Page Down".into(),
+        0x2d => "Insert".into(),
+        0x2e => "Delete".into(),
+        0x20 => "Space".into(),
+        0x09 => "Tab".into(),
+        0x0d => "Enter".into(),
+        0x25 => "Left".into(),
+        0x26 => "Up".into(),
+        0x27 => "Right".into(),
+        0x28 => "Down".into(),
+        0x70..=0x87 => format!("F{}", vk - 0x6f),
+        0x30..=0x39 | 0x41..=0x5a => char::from_u32(vk).unwrap().to_string(),
+        _ => format!("Key {vk:02X}"),
+    };
+    format!("{prefix}{key}")
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn settings_replace_an_existing_file_and_keep_exact_input() {
+        let path = std::env::temp_dir().join(format!(
+            "audeze-settings-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&path, b"old preferences").unwrap();
+        let config = Config {
+            duration_ms: 797,
+            settings_page: 2,
+            ..Config::default()
+        };
+        config.save_to(&path).unwrap();
+        let restored: Config = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(restored.duration_ms, 797);
+        assert_eq!(restored.settings_page, 2);
+        assert!(!path
+            .with_extension(format!("{}.tmp", std::process::id()))
+            .exists());
+        fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn old_layout_loses_only_footer_padding_once() {
+        let mut config = Config {
+            layout_version: 1,
+            height: 600,
+            ..Config::default()
+        };
+        let cells = (config.cell_width, config.cell_height);
+        config.migrate_layout();
+        assert_eq!(config.height, 584);
+        assert_eq!((config.cell_width, config.cell_height), cells);
+        config.migrate_layout();
+        assert_eq!(config.height, 584);
+    }
+    #[test]
+    fn resizing_creates_space_without_stretching_cards_and_finish_trims_it() {
+        let mut c = Config::default();
+        let cards = c.cards;
+        let cell = (c.cell_width, c.cell_height);
+        c.resize_canvas(1000, 900);
+        assert!(c.grid_columns > 12 && c.grid_rows > 15);
+        assert_eq!(c.cards, cards);
+        assert_eq!((c.cell_width, c.cell_height), cell);
+        c.trim_canvas();
+        assert!(c.width < 715 && c.height < 555);
+        assert_eq!(c.cards, cards);
+    }
+    #[test]
+    fn legacy_layout_keeps_its_visible_pixel_dimensions() {
+        let mut c: Config =
+            serde_json::from_str(r#"{"width":740,"height":706,"grid_rows":15}"#).unwrap();
+        assert_eq!(c.layout_version, 0);
+        c.migrate_layout();
+        assert!((c.cell_width - 716. / 12.).abs() < 0.01);
+        assert_eq!(c.cell_height, 40.);
+        let before = (c.cell_width, c.cell_height);
+        c.migrate_layout();
+        assert_eq!((c.cell_width, c.cell_height), before);
+    }
+    #[test]
+    fn hidden_cards_can_be_restored_after_trimming_an_empty_layout() {
+        let mut c = Config::default();
+        for card in &mut c.cards {
+            card.visible = false;
+        }
+        c.trim_canvas();
+        assert!(c.restore_card(4));
+        assert!(c.cards[4].visible);
+        assert!(crate::layout::valid_in(
+            &c.cards,
+            c.grid_columns,
+            c.grid_rows
+        ));
+    }
+    #[test]
+    fn one_or_two_keys_only() {
+        assert!(valid_hotkey(0, 0x24));
+        assert!(valid_hotkey(1, 0x24));
+        assert!(!valid_hotkey(3, 0x24));
+        assert!(!valid_hotkey(0, 0x12));
+        assert!(!valid_hotkey(0, 0x7b));
+    }
+}

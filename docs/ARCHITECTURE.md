@@ -1,0 +1,98 @@
+# Architecture and Rust reading guide
+
+This is a Windows desktop application with a small pure-Rust core. The executable
+owns a native window and a USB worker; it does not load into a game or require the
+official Audeze application. Dependencies point toward data and domain rules.
+
+## File map
+
+| Area | Responsibility | Start here |
+| --- | --- | --- |
+| Domain | Sound readings, change detection, optimistic mix reconciliation | `src/model.rs` |
+| Layout | Grid placement, minimum sizes, swaps, compaction | `src/layout.rs` |
+| Input | Editable numeric drafts and validation | `src/input.rs` |
+| Motion | Time-based easing and directional selection transitions | `src/motion.rs` |
+| Preferences | Defaults, migrations, bounds, persistence | `src/config.rs` |
+| Device commands | Typed commands, bounded/coalesced queue, error interface | `src/device/command.rs` |
+| USB protocol | Device access, packet framing, parsing | `src/device/usb.rs` |
+| USB scheduling | Worker thread, reads, acknowledgments, reconnects, tracing | `src/device/worker.rs` |
+| Raster drawing | Pixels, cached font glyphs, vector logo and primitives | `src/ui/draw.rs` |
+| Views | Read-only state to pixels and hit regions | `src/ui/view/` |
+| Presentation | Per-card and per-control animation state | `src/ui/presentation.rs` |
+| Application | Window lifetime and action coordination | `src/ui/window.rs` |
+| Native events | Win32 messages, guarded state access, event translation | `src/ui/window/events.rs` |
+| Painting | GDI resource ownership and layered-window presentation | `src/ui/window/painting.rs` |
+| Layout adapter | Pointer gestures and native card menus | `src/ui/window/layout_editor.rs` |
+| Settings adapter | Apply preferences, hotkeys, typed values and reset | `src/ui/window/settings.rs` |
+| Windows services | Startup registry entry and composition effects | `src/platform/` |
+| Diagnostics | Explicit opt-in executables, previews and hardware probes | `src/bin/` |
+| Legacy comparison | Official-app accessibility probes, feature-gated | `src/legacy/` |
+
+`src/main.rs` is the executable entry point. `src/lib.rs` exposes reusable core
+modules to the executable and diagnostics. There is no need for one crate per
+folder: modules provide useful boundaries without a workspace of tiny packages.
+
+## Follow one interaction
+
+1. A pointer message reaches `events.rs`. Hit testing produces an `Action` enum.
+2. The application translates that action into a layout operation, preference
+   change, or device `Command`.
+3. A sound command enters `Controller`. A newer command of the same kind replaces
+   an obsolete queued one, so dragging does not build a long backlog.
+4. The worker performs USB work and updates shared `SoundState`, then posts a
+   Windows message. The UI never waits for USB inside its event callback.
+5. Mix reconciliation keeps a new local target from being replaced by an older
+   readback. A failure releases that target and shows an error.
+6. `Presentation` computes a frame at the supplied time. `View` borrows the state;
+   rendering creates pixels and hit regions, without writing to the headset.
+7. A short animation timer requests the next frame only while motion is active.
+
+Hardware changes enter at step 4. A newly visible popup starts at the received
+value; it does not replay invisible intermediate animation frames.
+
+## A suggested reading order
+
+1. **`model.rs`**: structs, enums, `Option`, pattern matching and unit tests.
+   `Option` means a reading may be unavailable; it is not automatically zero.
+2. **`input.rs` and `motion.rs`**: small state machines and methods on owned
+   structs. Tests pass explicit times, avoiding sleep-based animation tests.
+3. **`layout.rs`**: copied value types, arrays, iterators, and invariants. Follow
+   a swap test before reading the complete placement algorithm.
+4. **`config.rs`**: Serde derives, defaults, migration, `Result`, and `?` error
+   propagation. Settings are serialized before replacing the saved file.
+5. **`ui/view/mod.rs`**: borrowed `&Config` and `&SoundState`. A borrowed view is
+   temporary and cannot outlive the state it references.
+6. **`device/command.rs` and `worker.rs`**: `Arc` shares ownership across threads;
+   `Mutex` controls access; the bounded wake channel avoids accumulating wakes.
+7. **`ui/window/painting.rs`**: RAII. `Bitmap::drop` restores the old selected
+   object and frees its GDI handles when ownership ends.
+8. **`ui/window/events.rs`**: the unsafe Windows boundary. Read the lifetime
+   comment and reentrancy guard before following the raw pointer conversion.
+
+Rust does not require a base class or interface for every component. Use enums
+for a closed set of actions and commands, functions for pure transformations,
+and traits where multiple implementations or a testing seam actually help.
+
+## Ownership and native callbacks
+
+`run` owns a `Box<WindowState>` for the HWND lifetime. Windows stores a pointer to
+that stable allocation. The callback retrieves it only while the HWND is alive;
+`WM_NCDESTROY` clears the pointer. `RefCell<App>` permits one mutable UI borrow.
+Synchronous re-entry cannot create a second mutable reference. Status, result,
+paint and resize signals are coalesced and posted after the borrow ends.
+Stateless frame responses still run during re-entry to preserve borderless
+geometry. The default window procedure runs without the UI borrow on the normal
+path, allowing Windows' native move/resize message loop to work.
+
+The worker owns the USB device. The UI owns rendering resources. Shared sound
+state is exchanged through a short-held mutex, not through raw pointers to UI
+objects. The worker lifetime is currently the process lifetime.
+
+## Validation boundaries
+
+Pure tests cover layout and state rules. Render previews cover compact layouts
+and intermediate animation frames. Native smoke checks exercise actual HWND,
+focus, click-through, resizing, hotkeys and callback re-entry using sample data.
+USB diagnostics are separate because physical hardware and firmware timing
+cannot be reproduced by the unit tests. Never run a control-changing diagnostic
+as an ordinary CI test.
