@@ -39,7 +39,8 @@ jobs:
         run: |
           $match = Select-String -LiteralPath Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1
           $version = $match.Matches[0].Groups[1].Value
-          $label = "$version-exp.$($env:REF_NAME).$($env:COMMIT_SHA.Substring(0, 8))"
+          $branch = $env:REF_NAME -replace '/', '-'
+          $label = "$version-exp-$branch-$($env:COMMIT_SHA.Substring(0, 8))"
           ./tools/package.ps1 -BuildLabel $label -BinaryPath 'target/x86_64-pc-windows-msvc/release/audeze-overlay.exe'
       - name: Upload artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
