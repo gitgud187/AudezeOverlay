@@ -67,12 +67,9 @@ jobs:
         with:
           name: windows-x64
           path: |
-            dist/release/*.exe
-            dist/release/*.zip
+            dist/release/Audeze-Overlay-Setup.exe
+            dist/release/Audeze-Overlay-Portable.zip
             dist/release/SHA256SUMS.txt
-            dist/release/DEPENDENCY-LICENSES.txt
-            dist/release/THIRD-PARTY-NOTICES.md
-            dist/release/LICENSE
           if-no-files-found: error
           retention-days: 30
       - name: Upload layout previews
@@ -108,33 +105,76 @@ jobs:
           $development = $env:REF_TYPE -ne 'tag'
           $tag = if ($development) { 'development' } else { $env:REF_NAME }
           $title = if ($development) { 'Latest main build' } else { $tag }
+          $changes = ''
           if ($development) {
-            gh api "repos/$env:GH_REPO/git/ref/tags/$tag" *> $null
+            $previousJson = gh api "repos/$env:GH_REPO/git/ref/tags/$tag" 2>$null
             if ($LASTEXITCODE -eq 0) {
+              $previousSha = ($previousJson | ConvertFrom-Json).object.sha
+              if ($previousSha -ne $env:COMMIT_SHA) {
+                $comparisonJson = gh api "repos/$env:GH_REPO/compare/$previousSha...$env:COMMIT_SHA"
+                if ($LASTEXITCODE -ne 0) { throw 'Could not generate release changelog' }
+                $comparison = $comparisonJson | ConvertFrom-Json
+                $changes = (@($comparison.commits | ForEach-Object {
+                  $subject = ($_.commit.message -split "`n")[0]
+                  "- $subject ([commit]($($_.html_url)))"
+                }) -join "`n") + "`n`n[Full changelog]($($comparison.html_url))"
+              } else {
+                $changes = 'Rebuilt the current main commit; no additional code changes.'
+                $existingBody = gh release view $tag --repo $env:GH_REPO --json body --jq .body
+                if ($LASTEXITCODE -eq 0 -and ($existingBody -join "`n") -match "(?s)## What's new\s+(.*?)\s+### Build details") {
+                  $changes = $Matches[1]
+                }
+              }
               gh api --method PATCH "repos/$env:GH_REPO/git/refs/tags/$tag" -f "sha=$env:COMMIT_SHA" -F force=true > $null
             } else {
+              $changes = 'First downloadable main build. See the README for supported features and setup.'
               gh api --method POST "repos/$env:GH_REPO/git/refs" -f "ref=refs/tags/$tag" -f "sha=$env:COMMIT_SHA" > $null
             }
             if ($LASTEXITCODE -ne 0) { throw 'Could not update development tag' }
           }
+          if (!$development) {
+            $generatedJson = gh api --method POST "repos/$env:GH_REPO/releases/generate-notes" -f "tag_name=$tag" -f "target_commitish=$env:COMMIT_SHA"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not generate version release changelog' }
+            $changes = ($generatedJson | ConvertFrom-Json).body
+          }
+          $download = "https://github.com/$env:GH_REPO/releases/download/$tag"
+          @(
+            '## Download for Windows 11 (64-bit)',
+            '',
+            "**[Install Audeze Overlay — recommended]($download/Audeze-Overlay-Setup.exe)**",
+            '',
+            'Run the installer, then open Audeze Overlay from the Start menu.',
+            '',
+            "[Portable ZIP — no installation]($download/Audeze-Overlay-Portable.zip): extract the ZIP and run Audeze Overlay.exe.",
+            '',
+            'Both downloads include the app and licenses. Source code archives are for developers. SHA256SUMS.txt is optional for verifying downloads.',
+            '',
+            "## What's new",
+            '',
+            $changes,
+            '',
+            '### Build details',
+            '',
+            "Built from commit $env:COMMIT_SHA. Packages are unsigned."
+          ) | Set-Content -LiteralPath release-notes.txt
           $files = @(Get-ChildItem -LiteralPath release -File | ForEach-Object FullName)
           gh release view $tag --repo $env:GH_REPO *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag @files --repo $env:GH_REPO --clobber
             if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
           } else {
-            $options = @('--verify-tag', '--title', $title)
+            $options = @('--verify-tag', '--title', $title, '--notes-file', 'release-notes.txt')
             if (!$development -and $tag.Contains('-')) {
               $options += @('--prerelease', '--latest=false')
             } else {
               $options += '--latest'
             }
-            if (!$development) { $options += '--generate-notes' }
             gh release create $tag @files --repo $env:GH_REPO @options
             if ($LASTEXITCODE -ne 0) { throw 'Release creation failed' }
           }
+          gh release edit $tag --repo $env:GH_REPO --notes-file release-notes.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Release changelog update failed' }
           if ($development) {
-            "Automatically built and tested from main at commit $env:COMMIT_SHA. Download the setup EXE for installation, or the portable ZIP. This rolling release is updated after successful main builds; version tags publish separate numbered releases. Packages are unsigned." | Set-Content -LiteralPath release-notes.txt
             # Promote existing prereleases too, so GitHub lists the main build as Latest.
             gh release edit $tag --repo $env:GH_REPO --title $title --notes-file release-notes.txt --draft=false --prerelease=false --latest
             if ($LASTEXITCODE -ne 0) { throw 'Release notes update failed' }

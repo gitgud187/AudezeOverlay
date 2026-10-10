@@ -7,9 +7,11 @@ Other headset models, Bluetooth, and wired USB connections are not implemented.
 
 ## Use
 
-Download the **windows-x64-setup.exe** installer from GitHub Releases, or
-extract the **portable.zip** and run **Audeze Overlay.exe**. A single portable
-EXE is also available. The installer adds a Start menu entry and an optional
+**[Download the Windows installer (recommended)](https://github.com/temdah/AudezeOverlay/releases/latest/download/Audeze-Overlay-Setup.exe)**
+
+Prefer no installation? Download the [portable ZIP](https://github.com/temdah/AudezeOverlay/releases/latest/download/Audeze-Overlay-Portable.zip),
+extract it, and run **Audeze Overlay.exe**. Both options include the same app and licenses.
+The installer adds a Start menu entry and an optional
 desktop shortcut, and installs for your Windows account without admin rights.
 Uninstall through Windows Settings → Apps; saved preferences are kept.
 
@@ -264,14 +266,16 @@ unsupported push notifications.
 
 `.github/workflows/windows.yml` runs on every push, pull request and manual
 workflow run. It checks formatting and Clippy (warnings are errors), runs Rust tests, verifies rendered layouts,
-and creates a standalone x64 EXE, portable ZIP, per-user installer and SHA-256
+and creates an x64 portable ZIP, per-user installer and SHA-256
 checksums. Open **Actions → Windows build and release → Artifacts → windows-x64**
 for development builds. Layout preview images are a separate artifact.
 
-Successful pushes to `main` publish the EXE, portable ZIP and installer as the
+Successful pushes to `main` publish the portable ZIP and installer as the
 [latest release](https://github.com/temdah/AudezeOverlay/releases/latest).
 This rolling release uses the `development` tag and is updated on each successful
 main build. No manual tag is needed.
+Release notes include download instructions and a changelog since the previous
+main build. Numbered releases use GitHub's generated release notes.
 
 To additionally publish a numbered release, set the version in `Cargo.toml`, run `cargo check` to
 update `Cargo.lock`, commit, then push a matching version tag:

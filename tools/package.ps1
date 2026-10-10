@@ -38,24 +38,18 @@ try {
     }
     Copy-Item -LiteralPath (Join-Path $root 'docs') -Destination (Join-Path $stage 'docs') -Recurse
     & (Join-Path $PSScriptRoot 'dependency-notices.ps1') -OutputPath (Join-Path $stage 'DEPENDENCY-LICENSES.txt') -Target $Target
-    $stem = "Audeze-Overlay-$BuildLabel-windows-x64"
-    $portable = Join-Path $out "$stem.exe"
-    $zip = Join-Path $out "$stem-portable.zip"
-    Copy-Item -LiteralPath $binary -Destination $portable -Force
-    Copy-Item -LiteralPath (Join-Path $stage 'DEPENDENCY-LICENSES.txt') -Destination $out -Force
-    Copy-Item -LiteralPath (Join-Path $stage 'THIRD-PARTY-NOTICES.md') -Destination $out -Force
-    Copy-Item -LiteralPath (Join-Path $stage 'LICENSE') -Destination $out -Force
+    $zip = Join-Path $out 'Audeze-Overlay-Portable.zip'
     Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Force
     & $compiler /Qp "/DAppVersion=$version" "/DBuildLabel=$BuildLabel" "/DStageDir=$stage" "/DOutputDir=$out" (Join-Path $root 'installer\audeze-overlay.iss')
     if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
-    $installer = Join-Path $out "$stem-setup.exe"
-    $lines = foreach ($file in @($portable, $zip, $installer)) {
+    $installer = Join-Path $out 'Audeze-Overlay-Setup.exe'
+    $lines = foreach ($file in @($zip, $installer)) {
         $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
         "$hash  $([IO.Path]::GetFileName($file))"
     }
     [IO.File]::WriteAllLines((Join-Path $out 'SHA256SUMS.txt'), $lines, [Text.UTF8Encoding]::new($false))
     Write-Host "Release files: $out"
-    Get-Item -LiteralPath $portable,$zip,$installer | Select-Object Name,Length
+    Get-Item -LiteralPath $zip,$installer | Select-Object Name,Length
 } finally {
     Pop-Location
 }
