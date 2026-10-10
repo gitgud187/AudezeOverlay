@@ -39,6 +39,7 @@ Source: "{#StageDir}\Audeze Overlay.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\CONTRIBUTING.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\docs\*.md"; DestDir: "{app}\docs"; Flags: ignoreversion
+Source: "{#StageDir}\docs\screenshots\*.png"; DestDir: "{app}\docs\screenshots"; Flags: ignoreversion
 Source: "{#StageDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\DEPENDENCY-LICENSES.txt"; DestDir: "{app}"; Flags: ignoreversion

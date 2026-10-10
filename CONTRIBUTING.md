@@ -1,5 +1,7 @@
 # Contributing
 
+Repository agent instructions and coding boundaries are in [AGENTS.md](AGENTS.md).
+
 Use current stable Rust on Windows. MSVC is the CI distribution target;
 `build.ps1` also supports the project's optional local LLVM-MinGW toolchain.
 Keep `Cargo.lock` committed. Do not commit `.tools`, `target`, `dist`, captures,

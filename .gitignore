@@ -32,5 +32,6 @@ __pycache__/
 /docs/CODE_REVIEW.md
 /review.md
 
-# Local model continuation notes (not release documentation).
-/handoff doc.md
+# Private handoffs and filename variations, at any directory depth and case.
+*[hH][aA][nN][dD][oO][fF][fF]*
+*[hH][aA][nN][dD][-_ ][oO][fF][fF]*
