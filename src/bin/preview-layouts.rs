@@ -16,6 +16,9 @@ fn main() {
     let mut painter = Painter::new();
     let sound = SoundState {
         mix_revision: 0,
+        eq_index: Some(0),
+        eq_bands: None,
+        eq_revision: 0,
         mix: Some((50, 50)),
         sidetone: Some(false),
         sidetone_level: Some(26),
@@ -48,7 +51,39 @@ fn main() {
     narrow.cards[2].w = 5;
     let mut narrow_mix = swapped.clone();
     narrow_mix.cards[0].w = 5;
+    let mut minimum = Config {
+        width: 440,
+        height: 440,
+        cell_width: 40.,
+        cell_height: 26.,
+        status_icons: true,
+        ..Config::default()
+    };
+    minimum.cards[0] = layout::Card {
+        x: 0,
+        y: 0,
+        w: 5,
+        h: 8,
+        visible: true,
+    };
+    for i in 1..6 {
+        minimum.cards[i] = layout::Card {
+            x: 5,
+            y: (i as i32 - 1) * 3,
+            w: 5,
+            h: 3,
+            visible: true,
+        };
+    }
+    minimum.cards[4].x = 0;
+    minimum.cards[4].y = 8;
+    minimum.cards[5].y = 9;
+    minimum.resize_canvas(440, 440);
+    let mut large_text = minimum.clone();
+    large_text.text_scale = 140;
     for (name, config) in [
+        ("minimum-cards", minimum),
+        ("minimum-large-text", large_text),
         ("compact", base),
         ("compact-tall", tall),
         ("swapped", swapped),
@@ -56,6 +91,7 @@ fn main() {
         ("swapped-five-columns", narrow_mix),
     ] {
         let view = View {
+            eq_editor: None,
             config: &config,
             sound: &sound,
             settings: None,
@@ -68,6 +104,7 @@ fn main() {
             mix: 50.,
             demo: true,
             monitor_label: "Automatic",
+            drag_preview: None,
             animation: None,
         };
         let scene = dashboard::render(&mut painter, config.width, config.height, 1., &view);
@@ -78,18 +115,19 @@ fn main() {
             .collect();
         assert_eq!(buttons.len(), 3, "{name}: every ANC mode has a hit target");
         let card = scene.cards[2];
+        let padding = if card.h < 110. { 7.9 } else { 15.9 };
         for (i, hit) in buttons.iter().enumerate() {
             let rect = hit.rect;
             assert!(
-                rect.x >= card.x + 15.9 && rect.y >= card.y + 40.,
+                rect.x >= card.x + padding && rect.y >= card.y + 30.,
                 "{name}: button inside card"
             );
             assert!(
-                rect.x + rect.w <= card.x + card.w - 15.9,
+                rect.x + rect.w <= card.x + card.w - padding,
                 "{name}: button fits width"
             );
             assert!(
-                rect.y + rect.h <= card.y + card.h - 15.9,
+                rect.y + rect.h <= card.y + card.h - padding,
                 "{name}: button fits height"
             );
             for other in &buttons[i + 1..] {
@@ -107,14 +145,22 @@ fn main() {
         println!("{path}: ANC bounds and nonoverlap verified");
     }
     let config = Config::default();
+    let mut eq_editor = audeze_overlay::eq::Editor {
+        selected: 6,
+        ..Default::default()
+    };
+    eq_editor.receive(audeze_overlay::eq::sample(6));
     let draft = audeze_overlay::input::NumberDraft::new("hold", 797);
     for (name, section) in [
+        ("equalizer", Some(5)),
+        ("cards-settings", Some(1)),
         ("editor", None),
         ("notifications", Some(2)),
         ("shortcuts", Some(3)),
         ("reset", Some(4)),
     ] {
         let view = View {
+            eq_editor: Some(&eq_editor),
             config: &config,
             sound: &sound,
             settings: section,
@@ -131,6 +177,7 @@ fn main() {
             mix: 50.,
             demo: false,
             monitor_label: "Automatic",
+            drag_preview: None,
             animation: None,
         };
         let (width, height) = if section.is_some() {
@@ -161,6 +208,7 @@ fn main() {
             now + std::time::Duration::from_millis(millis),
         );
         let view = View {
+            eq_editor: None,
             config: &config,
             sound: &after,
             settings: None,
@@ -173,6 +221,7 @@ fn main() {
             mix: 80.,
             demo: false,
             monitor_label: "Automatic",
+            drag_preview: None,
             animation: Some(&frame),
         };
         dashboard::render(&mut painter, config.width, config.height, 1., &view)

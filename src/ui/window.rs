@@ -2,9 +2,11 @@
 //! Domain rules live in the library; child modules isolate painting and editing.
 mod events;
 use events::proc;
+mod equalizer;
 mod layout_editor;
 mod painting;
 mod settings;
+use equalizer::*;
 mod smoke;
 use super::{
     draw::{Box2, Painter},
@@ -41,6 +43,7 @@ const OPEN: u32 = WM_APP + 3;
 const DRAW: u32 = WM_APP + 6;
 const TICK: usize = 1;
 const HOLD: usize = 2;
+const REORDER: usize = 4;
 const MIX_ANIMATION_MS: u64 = 70;
 #[derive(Clone)]
 struct Monitor {
@@ -54,12 +57,13 @@ enum Drag {
     None,
     Mix,
     Level,
+    EqBand(usize),
     Card {
         index: usize,
         resize: bool,
         x: f32,
         y: f32,
-        original_cards: [Card; 5],
+        original_cards: [Card; 6],
     },
 }
 // Windows may synchronously re-enter our callback during native API calls.
@@ -71,6 +75,7 @@ struct WindowState {
 struct App {
     hwnd: HWND,
     config: Config,
+    eq_editor: audeze_overlay::eq::Editor,
     sound: SoundState,
     latest: Arc<Mutex<SoundState>>,
     controller: Option<Controller>,
@@ -79,7 +84,7 @@ struct App {
     motion_active: bool,
     bitmap: Option<Bitmap>,
     hits: Vec<Hit>,
-    cards: [Box2; 5],
+    cards: [Box2; 6],
     settings: Option<usize>,
     edit: bool,
     interactive: bool,
@@ -89,6 +94,9 @@ struct App {
     recorded_key: Option<(u32, u32)>,
     number_edit: Option<audeze_overlay::input::NumberDraft>,
     drag: Drag,
+    reorder_hover: layout::HoverIntent,
+    drag_point: (f32, f32),
+    drag_preview: Option<(usize, Box2)>,
     demo: bool,
     capture: bool,
     hotkey_id: i32,
@@ -196,6 +204,7 @@ unsafe fn run() -> Result<()> {
     let app = App {
         hwnd: HWND::default(),
         config,
+        eq_editor: audeze_overlay::eq::Editor::default(),
         sound: if demo {
             sample()
         } else {
@@ -211,7 +220,7 @@ unsafe fn run() -> Result<()> {
         motion_active: false,
         bitmap: None,
         hits: vec![],
-        cards: [Box2::default(); 5],
+        cards: [Box2::default(); 6],
         settings: if args.iter().any(|s| s == "--settings") {
             Some(
                 args.iter()
@@ -219,7 +228,7 @@ unsafe fn run() -> Result<()> {
                     .and_then(|i| args.get(i + 1))
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(remembered_page)
-                    .min(4),
+                    .min(5),
             )
         } else {
             None
@@ -232,6 +241,9 @@ unsafe fn run() -> Result<()> {
         recorded_key: None,
         number_edit: None,
         drag: Drag::None,
+        reorder_hover: layout::HoverIntent::default(),
+        drag_point: (0., 0.),
+        drag_preview: None,
         demo,
         capture,
         hotkey_id: 1,
@@ -325,6 +337,9 @@ unsafe fn run() -> Result<()> {
 fn sample() -> SoundState {
     SoundState {
         mix_revision: 0,
+        eq_index: Some(0),
+        eq_bands: None,
+        eq_revision: 0,
         mix: Some((50, 50)),
         sidetone: Some(false),
         sidetone_level: Some(26),
@@ -428,6 +443,13 @@ unsafe fn request_draw(app: &mut App) {
     }
 }
 unsafe fn show(app: &mut App, interactive: bool) {
+    if interactive {
+        if app.settings == Some(5) {
+            open_eq(app);
+        } else if app.config.cards[5].visible {
+            send(app, Command::EqRefresh);
+        }
+    }
     let was_visible = IsWindowVisible(app.hwnd).as_bool();
     let _ = KillTimer(Some(app.hwnd), HOLD);
     app.interactive = interactive;
@@ -438,7 +460,7 @@ unsafe fn show(app: &mut App, interactive: bool) {
         app.settings = None;
         app.edit = false;
     }
-    let blur = app.config.background_blur && app.settings.is_none();
+    let blur = app.config.background_blur;
     if app.applied_blur != Some(blur) {
         let _ = crate::platform::blur::apply(app.hwnd, blur);
         app.applied_blur = Some(blur);
@@ -492,6 +514,7 @@ unsafe fn show(app: &mut App, interactive: bool) {
     }
 }
 unsafe fn hide(app: &mut App) {
+    commit_eq_name(app);
     if app.edit {
         finish_layout(app);
     }
@@ -589,7 +612,18 @@ unsafe fn send(app: &mut App, c: Command) {
             Command::SidetoneLevel(n) => app.sound.sidetone_level = Some(n),
             Command::Anc(s) => app.sound.anc = Some(s),
             Command::Noise(s) => app.sound.noise = Some(s),
+            Command::EqSelect(slot) => app.sound.eq_index = Some(slot),
+            Command::EqRefresh => (),
+            Command::EqLoad(slot) => app.sound.eq_bands = Some(audeze_overlay::eq::sample(slot)),
+            Command::EqGain { slot, band } => {
+                if let Some(eq) = app.sound.eq_bands.as_mut().filter(|eq| eq.slot == slot) {
+                    if let Some(b) = eq.bands.iter_mut().find(|b| b.id == band.id) {
+                        *b = band;
+                    }
+                }
+            }
         }
+        receive_eq(app);
         app.note = "Preview — headset unchanged".into();
     } else if app.sound.mix.is_none() {
         app.note = "Connect and turn on the Maxwell 2 ANC headset.".into();
@@ -633,7 +667,21 @@ unsafe fn act(app: &mut App, action: Action, x: f32, y: f32) {
     if !matches!(action, Action::Number(_) | Action::None) && !commit_number(app) {
         return;
     }
+    if action != Action::EqRename {
+        commit_eq_name(app);
+    }
     match action {
+        Action::EqMenu => eq_menu(app),
+        Action::EqEditor => { app.settings = Some(5); app.config.settings_page = 5; save(app); show(app, true); },
+        Action::EqInspect(slot) => inspect_eq(app, slot),
+        Action::EqUse(slot) => send(app, Command::EqSelect(slot)),
+        Action::EqPin(slot) => { app.config.eq.pinned[slot as usize] = !app.config.eq.pinned[slot as usize]; save(app); },
+        Action::EqBand(index) => { app.drag = Drag::EqBand(index); SetCapture(app.hwnd); set_eq_band(app, index, y); },
+        Action::EqSave => save_eq(app),
+        Action::EqDiscard => { if let Some(d) = app.eq_editor.draft_mut() { if !d.saving { d.value = d.original; } } },
+        Action::EqFlat => { if let Some(d) = app.eq_editor.draft_mut() { for i in 0..10 { d.set_gain(i, 0.); } } },
+        Action::EqRename => { if app.eq_editor.selected >= 6 { app.eq_editor.name_edit = Some(app.config.eq.name(app.eq_editor.selected).into()); app.eq_editor.name_selected = true; } },
+        Action::EqReload => inspect_eq(app, app.eq_editor.selected),
         Action::Close => hide(app),
         Action::Settings => {
             if app.edit {
@@ -649,6 +697,7 @@ unsafe fn act(app: &mut App, action: Action, x: f32, y: f32) {
         Action::Tab(i) => {
             app.settings = Some(i);
             app.config.settings_page = i;
+            if i == 5 { open_eq(app); }
             save(app);
         }
         Action::Edit => {
@@ -689,6 +738,9 @@ unsafe fn act(app: &mut App, action: Action, x: f32, y: f32) {
         ),
         Action::Noise(i) => send(app, Command::Noise(["Off", "Low", "High"][i as usize].into())),
         Action::Card(i) | Action::ResizeCard(i) if app.edit && !app.config.locked => {
+            app.reorder_hover = layout::HoverIntent::default();
+            app.drag_point = (x,y);
+            app.drag_preview = None;
             app.drag = Drag::Card {
                 index: i,
                 resize: matches!(action, Action::ResizeCard(_)),
@@ -741,6 +793,7 @@ fn hit(app: &App, x: f32, y: f32) -> Action {
 unsafe fn changed(app: &mut App) {
     let mut next = app.latest.lock().unwrap().clone();
     reconcile_mix(&mut app.pending_mix, &mut next);
+    let connected_now = app.sound.mix.is_none() && next.mix.is_some();
     let prev = &app.sound;
     let n = app.config.notify;
     fn changed_value<T: PartialEq>(old: &Option<T>, new: &Option<T>) -> bool {
@@ -773,6 +826,10 @@ unsafe fn changed(app: &mut App) {
             };
     }
     app.sound = next;
+    receive_eq(app);
+    if connected_now && app.settings == Some(5) {
+        open_eq(app);
+    }
     if (popup || alert) && app.config.auto_show && !app.interactive {
         show(app, false);
     }

@@ -1,5 +1,6 @@
 //! Pure rendering from an immutable View into pixels and hit targets.
 mod cards;
+mod equalizer;
 mod settings;
 use super::draw::{Box2, Canvas, Painter};
 use audeze_overlay::{config::Config, layout, model::SoundState};
@@ -30,6 +31,17 @@ pub enum Action {
     EndRecord,
     Number(&'static str),
     ResetApp,
+    EqMenu,
+    EqEditor,
+    EqInspect(u8),
+    EqUse(u8),
+    EqPin(u8),
+    EqBand(usize),
+    EqSave,
+    EqDiscard,
+    EqFlat,
+    EqRename,
+    EqReload,
 }
 #[derive(Clone, Copy)]
 pub struct Hit {
@@ -38,6 +50,7 @@ pub struct Hit {
 }
 pub struct View<'a> {
     pub config: &'a Config,
+    pub eq_editor: Option<&'a audeze_overlay::eq::Editor>,
     pub sound: &'a SoundState,
     pub settings: Option<usize>,
     pub edit: bool,
@@ -49,12 +62,13 @@ pub struct View<'a> {
     pub mix: f32,
     pub demo: bool,
     pub monitor_label: &'a str,
+    pub drag_preview: Option<(usize, Box2)>,
     pub animation: Option<&'a super::presentation::AnimationFrame>,
 }
 pub struct Scene {
     pub pix: tiny_skia::Pixmap,
     pub hits: Vec<Hit>,
-    pub cards: [Box2; 5],
+    pub cards: [Box2; 6],
 }
 const FG: u32 = 0xf6f6f6;
 const SUB: u32 = 0xbdbdbd;
@@ -113,12 +127,12 @@ fn switch(c: &mut Canvas, h: &mut Vec<Hit>, r: Box2, on: bool, a: Action) {
     );
     h.push(Hit { rect: r, action: a });
 }
-pub fn card_boxes(config: &Config, _w: f32, _h: f32) -> [Box2; 5] {
+pub fn card_boxes(config: &Config, _w: f32, _h: f32) -> [Box2; 6] {
     let (cw, ch) = (config.cell_width, config.cell_height);
     config.cards.map(|r| {
         Box2::new(
             12. + r.x as f32 * cw + 4.,
-            74. + r.y as f32 * ch + 4.,
+            config.card_top() + r.y as f32 * ch + 4.,
             r.w as f32 * cw - 8.,
             r.h as f32 * ch - 8.,
         )
@@ -129,9 +143,7 @@ pub fn render(painter: &mut Painter, width: u32, height: u32, scale: f32, v: &Vi
     let (w, h) = (width as f32 / scale, height as f32 / scale);
     let mut hits = vec![];
     let settings = v.settings.is_some();
-    let bg = if settings {
-        1.
-    } else if v.edit {
+    let bg = if v.edit {
         (v.config.background_opacity as f32 / 100.).max(0.18)
     } else {
         v.config.background_opacity as f32 / 100.
@@ -141,6 +153,9 @@ pub fn render(painter: &mut Painter, width: u32, height: u32, scale: f32, v: &Vi
     // testing. A one-alpha header gives dragging a continuous, invisible target.
     c.rect(Box2::new(16., 14., w - 190., 46.), 0x101010, 1. / 255., 0.);
     c.logo(30., 25., 162.);
+    if v.config.status_icons {
+        cards::status_icons(&mut c, v);
+    }
     if v.demo {
         c.text(
             "PREVIEW",
@@ -196,7 +211,10 @@ pub fn render(painter: &mut Painter, width: u32, height: u32, scale: f32, v: &Vi
             let (cols, rows) = v.config.canvas_cells(w, h);
             for x in 0..=cols {
                 c.line(
-                    &[(12. + x as f32 * cw, 74.), (12. + x as f32 * cw, h - 16.)],
+                    &[
+                        (12. + x as f32 * cw, v.config.card_top()),
+                        (12. + x as f32 * cw, h - 16.),
+                    ],
                     0xffffff,
                     0.13,
                     1.,
@@ -204,14 +222,26 @@ pub fn render(painter: &mut Painter, width: u32, height: u32, scale: f32, v: &Vi
             }
             for y in 0..=rows {
                 c.line(
-                    &[(12., 74. + y as f32 * ch), (w - 12., 74. + y as f32 * ch)],
+                    &[
+                        (12., v.config.card_top() + y as f32 * ch),
+                        (w - 12., v.config.card_top() + y as f32 * ch),
+                    ],
                     0xffffff,
                     0.13,
                     1.,
                 );
             }
         }
-        for (i, r) in cards.iter().copied().enumerate() {
+        let floating = v.drag_preview.map(|p| p.0);
+        let order = (0..cards.len())
+            .filter(|i| Some(*i) != floating)
+            .chain(floating);
+        for i in order {
+            let r = v
+                .drag_preview
+                .filter(|p| p.0 == i)
+                .map(|p| p.1)
+                .unwrap_or(cards[i]);
             if !v.config.cards[i].visible {
                 continue;
             }

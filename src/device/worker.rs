@@ -1,5 +1,5 @@
 //! Maxwell 2 ANC USB-dongle sound protocol. Only the observed sound commands
-//! are exposed: no firmware, flash, EQ, memory, or arbitrary command interface.
+//! are exposed, including bounded custom EQ edits. No firmware or arbitrary commands.
 use super::usb::{Device, Query, QUERIES};
 use crate::{
     device::command::{Command, Controller, QueuedCommand, CONTROL_MESSAGE, STATUS_MESSAGE},
@@ -50,7 +50,7 @@ fn post(hwnd: isize, msg: u32) {
         }
     }
 }
-fn next_query(due: &[Instant; 7], now: Instant, previous: Option<Query>) -> Option<usize> {
+fn next_query(due: &[Instant; 10], now: Instant, previous: Option<Query>) -> Option<usize> {
     let background = (1..7).filter(|i| due[*i] <= now).min_by_key(|i| due[*i]);
     if due[0] <= now && (previous != Some(Query::Mix) || background.is_none()) {
         Some(0)
@@ -64,7 +64,7 @@ enum ReadyWork {
     Query(Query),
 }
 fn ready_work(
-    due: &[Instant; 7],
+    due: &[Instant; 10],
     now: Instant,
     previous: Option<Query>,
     flight: bool,
@@ -79,13 +79,23 @@ fn ready_work(
         // reading the last command's result indefinitely.
         Some(ReadyWork::Query(q))
     } else if commands {
-        Some(ReadyWork::Write)
+        // Saving multiple EQ bands yields to an overdue mix read between bands.
+        if previous == Some(Query::EqBands) && due[0] <= now {
+            Some(ReadyWork::Query(Query::Mix))
+        } else {
+            Some(ReadyWork::Write)
+        }
     } else {
         next_query(due, now, previous).map(|i| ReadyWork::Query(QUERIES[i]))
     }
 }
 fn query_timeout(q: Query) -> Duration {
-    Duration::from_millis(if q == Query::Mix { 160 } else { 100 })
+    Duration::from_millis(match q {
+        Query::Mix => 160,
+        Query::EqWriteAck => 500,
+        Query::EqBands => 250,
+        _ => 100,
+    })
 }
 fn query_interval(q: Query) -> Duration {
     Duration::from_millis(match q {
@@ -237,7 +247,7 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                     connection: Some("USB Dongle".into()),
                     ..SoundState::default()
                 };
-                let mut due = [Instant::now(); 7];
+                let mut due = [Instant::now(); 10];
                 let mut last_good = Instant::now();
                 let mut waiting: Vec<(Query, Instant, QueuedCommand)> = vec![];
                 let mut flight: Option<(Query, Instant, u64)> = None;
@@ -268,10 +278,22 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                             match device.set(&cmd.command) {
                                 Ok(q) => {
                                     trace.record("write", Some(q), sent.elapsed(), None);
-                                    write_ready = Instant::now() + Duration::from_millis(40);
+                                    write_ready = Instant::now()
+                                        + if matches!(
+                                            cmd.command,
+                                            Command::EqLoad(_)
+                                                | Command::EqRefresh
+                                                | Command::EqGain { .. }
+                                        ) {
+                                            Duration::ZERO
+                                        } else {
+                                            Duration::from_millis(40)
+                                        };
                                     due[q as usize] = write_ready;
                                     pending_readback = Some(q);
-                                    waiting.retain(|(old, _, _)| *old != q);
+                                    waiting.retain(|(_, _, old)| {
+                                        !cmd.command.supersedes(&old.command)
+                                    });
                                     waiting.push((q, Instant::now(), cmd));
                                 }
                                 Err(e) => {
@@ -325,7 +347,7 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                         read_ready = written + Duration::from_millis(25);
                         due[i] = written + query_interval(q);
                     }
-                    let mut updated_fields = 0u8;
+                    let mut updated_fields = 0u16;
                     let mut received = Instant::now();
                     if let Some((q, started, request)) = flight {
                         if Instant::now() >= read_ready {
@@ -453,6 +475,17 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                                 },
                             );
                             flight = None;
+                            if q == Query::EqWriteAck {
+                                // Firmware may ignore a bank read while persisting a write.
+                                // Only the ACK releases the subsequent readback; never mark
+                                // a band saved from its acknowledgment alone.
+                                for (field, _, _) in &mut waiting {
+                                    if *field == Query::EqWriteAck {
+                                        *field = Query::EqBands;
+                                    }
+                                }
+                                pending_readback = Some(Query::EqBands);
+                            }
                         } else if started.elapsed() >= query_timeout(q) {
                             trace.record_with(
                                 "timeout",
@@ -464,6 +497,12 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                                     ..Default::default()
                                 },
                             );
+                            if matches!(q, Query::EqBands | Query::EqWriteAck) {
+                                return Err(
+                                    "EQ response timed out. Reconnecting before another bank is read."
+                                        .into(),
+                                );
+                            }
                             // A slow secondary query gets a cooldown instead of
                             // repeatedly occupying the queue ahead of the mix dial.
                             if q != Query::Mix {
@@ -482,6 +521,10 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                     waiting.retain(|(q, started, cmd)| {
                         let matches = command_matches(&cmd.command, &state);
                         if updated_fields & (1 << *q as u8) != 0 && matches {
+                            if *q == Query::EqBands {
+                                state.eq_revision = cmd.sequence;
+                                state_may_have_changed = true;
+                            }
                             if *q == Query::Mix {
                                 state.mix_revision = cmd.sequence;
                                 state_may_have_changed = true;
@@ -548,7 +591,7 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                         read_ready.min(t + query_timeout(q))
                     } else {
                         let next = if worker.pending.lock().unwrap().is_empty() {
-                            *due.iter().min().unwrap()
+                            *due[..7].iter().min().unwrap()
                         } else {
                             Instant::now()
                         };
@@ -579,6 +622,12 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
 }
 pub fn command_matches(c: &Command, s: &SoundState) -> bool {
     match c {
+        Command::EqRefresh => s.eq_index.is_some(),
+        Command::EqSelect(slot) => s.eq_index == Some(*slot),
+        Command::EqLoad(slot) => s.eq_bands.is_some_and(|eq| eq.slot == *slot),
+        Command::EqGain { slot, band } => s.eq_bands.is_some_and(|eq| {
+            eq.slot == *slot && eq.bands.iter().any(|b| b.id == band.id && *b == *band)
+        }),
         Command::Mix(p) => s.mix.map(|m| m.1) == Some((*p as f32 / 5.).round() as u8 * 5),
         Command::Sidetone(b) => s.sidetone == Some(*b),
         Command::SidetoneLevel(p) => s
@@ -593,9 +642,60 @@ pub fn command_matches(c: &Command, s: &SoundState) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn eq_write_requires_ack_then_readback_without_changing_mix_timing() {
+        let now = Instant::now();
+        let due = [now; 10];
+        assert_eq!(
+            ready_work(
+                &due,
+                now,
+                Some(Query::Mix),
+                true,
+                now,
+                Some(Query::EqWriteAck),
+                true
+            ),
+            None
+        );
+        assert_eq!(
+            ready_work(
+                &due,
+                now,
+                Some(Query::EqWriteAck),
+                false,
+                now,
+                Some(Query::EqBands),
+                true
+            ),
+            Some(ReadyWork::Query(Query::EqBands))
+        );
+        assert_eq!(query_interval(Query::Mix), Duration::from_millis(50));
+        assert_eq!(query_timeout(Query::Mix), Duration::from_millis(160));
+        assert_eq!(query_timeout(Query::EqWriteAck), Duration::from_millis(500));
+        assert_eq!(query_timeout(Query::Anc), Duration::from_millis(100));
+        assert_eq!(query_timeout(Query::EqBands), Duration::from_millis(250));
+    }
+    #[test]
+    fn eq_saves_yield_to_due_mix_and_eq_is_never_polled_when_idle() {
+        let now = Instant::now();
+        let mut due = [now + Duration::from_secs(1); 10];
+        due[7] = now;
+        due[8] = now;
+        assert_eq!(next_query(&due, now, None), None);
+        due[0] = now;
+        assert_eq!(
+            ready_work(&due, now, Some(Query::EqBands), false, now, None, true),
+            Some(ReadyWork::Query(Query::Mix))
+        );
+        assert_eq!(
+            ready_work(&due, now, Some(Query::Mix), false, now, None, true),
+            Some(ReadyWork::Write)
+        );
+    }
+    #[test]
     fn continuous_commands_get_one_readback_before_the_next_write() {
         let start = Instant::now();
-        let due = [start; 7];
+        let due = [start; 10];
         let mut now = start;
         let mut previous = None;
         let mut operations = vec![];
@@ -711,7 +811,7 @@ mod tests {
     #[test]
     fn overdue_background_reads_cannot_queue_ahead_of_mix() {
         let now = Instant::now();
-        let due = [now - Duration::from_secs(1); 7];
+        let due = [now - Duration::from_secs(1); 10];
         assert_eq!(next_query(&due, now, Some(Query::Anc)), Some(0));
         let background = next_query(&due, now, Some(Query::Mix)).unwrap();
         assert_ne!(background, 0);
@@ -723,7 +823,7 @@ mod tests {
             ),
             Some(0)
         );
-        let future = [now + Duration::from_secs(1); 7];
+        let future = [now + Duration::from_secs(1); 10];
         assert_eq!(next_query(&future, now, None), None);
     }
 }

@@ -21,6 +21,7 @@ pub(super) unsafe fn smoke(app: &mut App) {
             SetTimer(Some(app.hwnd), HOLD, 100, None);
         }
         8 => {
+            app.sound = sample();
             app.checks.push((
                 "popup_fades_and_hides".into(),
                 !IsWindowVisible(app.hwnd).as_bool(),
@@ -118,6 +119,17 @@ pub(super) unsafe fn smoke(app: &mut App) {
                 source.y + source.h / 2.,
             );
             drag(app, target.x + target.w / 2., target.y + target.h / 2.);
+            app.checks.push((
+                "passing_over_does_not_swap".into(),
+                app.config.cards[2] == original[2],
+            ));
+            app.reorder_hover = layout::HoverIntent::default();
+            app.reorder_hover.update(
+                Some(2),
+                (target.x + target.w / 2., target.y + target.h / 2.),
+                Instant::now() - layout::HoverIntent::DELAY,
+            );
+            drag(app, target.x + target.w / 2., target.y + target.h / 2.);
             let swapped = app.config.cards;
             drag(app, target.x + target.w / 2., target.y + target.h / 2.);
             app.checks.push((
@@ -137,6 +149,11 @@ pub(super) unsafe fn smoke(app: &mut App) {
                 Action::Card(0),
                 source.x + source.w / 2.,
                 source.y + source.h / 2.,
+            );
+            app.reorder_hover.update(
+                Some(1),
+                (target.x + target.w / 2., target.y + target.h / 2.),
+                Instant::now() - layout::HoverIntent::DELAY,
             );
             drag(app, target.x + target.w / 2., target.y + target.h / 2.);
             app.checks.push((
@@ -259,6 +276,51 @@ pub(super) unsafe fn smoke(app: &mut App) {
                 "config_round_trip".into(),
                 serde_json::from_slice::<Config>(&serde_json::to_vec(&app.config).unwrap()).is_ok(),
             ));
+            let size_before = app.config.cards;
+            setting(app, "status-icons", 0);
+            app.checks.push((
+                "header_status_preserves_card_sizes".into(),
+                app.config.status_icons && app.config.cards == size_before,
+            ));
+            act(app, Action::EqEditor, 0., 0.);
+            act(app, Action::EqInspect(6), 0., 0.);
+            render(app);
+            app.checks.push((
+                "eq_editor_loads_ten_bands".into(),
+                app.hits
+                    .iter()
+                    .filter(|h| matches!(h.action, Action::EqBand(_)))
+                    .count()
+                    == 10,
+            ));
+            let eq_before = app.sound.eq_bands;
+            app.eq_editor.draft_mut().unwrap().set_gain(2, 4.);
+            app.checks.push((
+                "eq_tuning_is_local_until_save".into(),
+                app.sound.eq_bands == eq_before,
+            ));
+            act(app, Action::EqSave, 0., 0.);
+            app.checks.push((
+                "eq_save_confirms_draft".into(),
+                app.sound.eq_bands.unwrap().bands[2].gain == 4.
+                    && !app.eq_editor.draft().unwrap().dirty(),
+            ));
+            act(app, Action::EqUse(6), 0., 0.);
+            app.checks
+                .push(("eq_quick_selection".into(), app.sound.eq_index == Some(6)));
+            act(app, Action::EqPin(6), 0., 0.);
+            app.checks
+                .push(("eq_pin_visibility".into(), !app.config.eq.visible(6)));
+            setting(app, "eq-factory", 0);
+            app.checks
+                .push(("eq_factory_visibility".into(), !app.config.eq.visible(0)));
+            act(app, Action::EqRename, 0., 0.);
+            for ch in "Gaming".chars() {
+                type_eq_name(app, ch);
+            }
+            commit_eq_name(app);
+            app.checks
+                .push(("eq_custom_name".into(), app.config.eq.name(6) == "Gaming"));
             let sound_before_reset = app.sound.clone();
             factory_reset(app);
             app.checks.push((

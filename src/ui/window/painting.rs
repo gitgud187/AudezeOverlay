@@ -70,6 +70,7 @@ pub(super) unsafe fn render_frame(app: &mut App, prepare_hidden: bool) {
         SetTimer(Some(app.hwnd), TICK, 16, None);
     }
     let view = View {
+        eq_editor: Some(&app.eq_editor),
         config: &app.config,
         sound: &app.sound,
         settings: app.settings,
@@ -82,6 +83,7 @@ pub(super) unsafe fn render_frame(app: &mut App, prepare_hidden: bool) {
         mix,
         demo: app.demo,
         monitor_label: label,
+        drag_preview: app.drag_preview,
         animation: Some(&animation),
     };
     let scene = dashboard::render(&mut app.painter, w, h, scale, &view);

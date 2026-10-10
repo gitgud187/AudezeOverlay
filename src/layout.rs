@@ -12,20 +12,25 @@ impl Card {
         self.x < o.x + o.w && self.x + self.w > o.x && self.y < o.y + o.h && self.y + self.h > o.y
     }
 }
-pub const NAMES: [&str; 5] = [
+pub const NAMES: [&str; 6] = [
     "Game / Chat Mix",
     "Sidetone",
     "Noise cancellation",
     "AI noise removal",
     "Device status",
+    "Equalizer",
 ];
-pub fn defaults() -> [Card; 5] {
+pub fn defaults() -> [Card; 6] {
     [
         card(0, 0, 6, 12),
         card(6, 0, 6, 4),
         card(6, 4, 6, 4),
         card(6, 8, 6, 4),
         card(0, 12, 12, 3),
+        Card {
+            visible: false,
+            ..card(0, 15, 6, 5)
+        },
     ]
 }
 fn card(x: i32, y: i32, w: i32, h: i32) -> Card {
@@ -40,15 +45,14 @@ fn card(x: i32, y: i32, w: i32, h: i32) -> Card {
 pub fn minimum(i: usize) -> (i32, i32) {
     match i {
         0 => (5, 8),
-        4 => (6, 3),
-        _ => (5, 4),
+        _ => (5, 3),
     }
 }
 /// Place on the nearest unoccupied grid cells; never silently overlap controls.
-pub fn place(cards: &mut [Card; 5], i: usize, proposed: Card, rows: i32) -> bool {
+pub fn place(cards: &mut [Card; 6], i: usize, proposed: Card, rows: i32) -> bool {
     place_in(cards, i, proposed, 12, rows)
 }
-pub fn place_in(cards: &mut [Card; 5], i: usize, mut proposed: Card, cols: i32, rows: i32) -> bool {
+pub fn place_in(cards: &mut [Card; 6], i: usize, mut proposed: Card, cols: i32, rows: i32) -> bool {
     if i >= cards.len() || rows < minimum(i).1 {
         return false;
     }
@@ -85,22 +89,22 @@ pub fn place_in(cards: &mut [Card; 5], i: usize, mut proposed: Card, cols: i32, 
 /// keeps a hovered swap stable instead of swapping the same two cards every frame.
 /// `pointer` is in grid coordinates, so the card under the cursor is the drop slot.
 pub fn preview_move(
-    original: &[Card; 5],
+    original: &[Card; 6],
     i: usize,
     proposed: Card,
     pointer: (f32, f32),
     rows: i32,
-) -> Option<[Card; 5]> {
+) -> Option<[Card; 6]> {
     preview_move_in(original, i, proposed, pointer, 12, rows)
 }
 pub fn preview_move_in(
-    original: &[Card; 5],
+    original: &[Card; 6],
     i: usize,
     mut proposed: Card,
     pointer: (f32, f32),
     cols: i32,
     rows: i32,
-) -> Option<[Card; 5]> {
+) -> Option<[Card; 6]> {
     if i >= original.len()
         || !original[i].visible
         || !valid_in(original, cols, rows)
@@ -134,10 +138,10 @@ pub fn preview_move_in(
 }
 
 #[cfg(test)]
-fn valid(cards: &[Card; 5], rows: i32) -> bool {
+fn valid(cards: &[Card; 6], rows: i32) -> bool {
     valid_in(cards, 12, rows)
 }
-pub fn valid_in(cards: &[Card; 5], cols: i32, rows: i32) -> bool {
+pub fn valid_in(cards: &[Card; 6], cols: i32, rows: i32) -> bool {
     cards.iter().enumerate().all(|(i, c)| {
         !c.visible
             || (c.x >= 0
@@ -164,12 +168,12 @@ fn in_slot(c: Card, i: usize, slot: Card, cols: i32, rows: i32) -> Card {
 }
 
 fn swap_into_slot(
-    original: &[Card; 5],
+    original: &[Card; 6],
     i: usize,
     j: usize,
     cols: i32,
     rows: i32,
-) -> Option<[Card; 5]> {
+) -> Option<[Card; 6]> {
     let destination = in_slot(original[i], i, original[j], cols, rows);
     let replacement = in_slot(original[j], j, original[i], cols, rows);
     let mut preferred = *original;
@@ -196,7 +200,7 @@ fn swap_into_slot(
     }
     let mut result = *original;
     result[i] = destination;
-    let mut fixed = [true; 5];
+    let mut fixed = [true; 6];
     for &k in &moving {
         fixed[k] = false;
     }
@@ -211,7 +215,7 @@ fn swap_into_slot(
         .iter()
         .map(|&k| placement_candidates(preferred[k], k, cols, rows))
         .collect();
-    // Only five cards exist. Bound speculative packing work so pointer movement
+    // Only six cards exist. Bound speculative packing work so pointer movement
     // cannot turn a crowded layout into an expensive search on the UI thread.
     let mut budget = 12_000;
     if pack(
@@ -264,8 +268,8 @@ fn placement_candidates(preferred: Card, i: usize, cols: i32, rows: i32) -> Vec<
 }
 
 fn pack(
-    result: &mut [Card; 5],
-    fixed: &mut [bool; 5],
+    result: &mut [Card; 6],
+    fixed: &mut [bool; 6],
     moving: &[usize],
     candidates: &[Vec<Card>],
     depth: usize,
@@ -297,7 +301,7 @@ fn pack(
     false
 }
 /// Resize at the existing origin, stopping at neighbors instead of moving the card.
-pub fn resize_in(cards: &mut [Card; 5], i: usize, proposed: Card, cols: i32, rows: i32) -> bool {
+pub fn resize_in(cards: &mut [Card; 6], i: usize, proposed: Card, cols: i32, rows: i32) -> bool {
     if i >= cards.len() {
         return false;
     }
@@ -328,15 +332,15 @@ pub fn resize_in(cards: &mut [Card; 5], i: usize, proposed: Card, cols: i32, row
     }
     false
 }
-pub fn extent(cards: &[Card; 5]) -> (i32, i32) {
+pub fn extent(cards: &[Card; 6]) -> (i32, i32) {
     cards
         .iter()
         .filter(|c| c.visible)
         .fold((0, 0), |(w, h), c| (w.max(c.x + c.w), h.max(c.y + c.h)))
 }
 /// Remove vertical gaps without changing widths, heights, or column choices.
-pub fn compact(cards: &mut [Card; 5]) {
-    let mut order: Vec<_> = (0..5).filter(|&i| cards[i].visible).collect();
+pub fn compact(cards: &mut [Card; 6]) {
+    let mut order: Vec<_> = (0..6).filter(|&i| cards[i].visible).collect();
     order.sort_by_key(|&i| (cards[i].y, cards[i].x, i));
     for i in order {
         for y in 0..cards[i].y {
@@ -353,7 +357,7 @@ pub fn compact(cards: &mut [Card; 5]) {
     }
 }
 /// Re-add a hidden card, extending the canvas if there is no existing free slot.
-pub fn restore(cards: &mut [Card; 5], i: usize, cols: i32, rows: i32) -> Option<i32> {
+pub fn restore(cards: &mut [Card; 6], i: usize, cols: i32, rows: i32) -> Option<i32> {
     if i >= cards.len() || cols < minimum(i).0 {
         return None;
     }
@@ -510,5 +514,80 @@ mod tests {
         compact(&mut c);
         assert_eq!(extent(&c).1, 15);
         assert_eq!(sizes, c.map(|card| (card.w, card.h)));
+    }
+}
+
+/// Stationary hover expresses reorder intent; crossing a card never commits a swap.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HoverIntent {
+    target: Option<usize>,
+    anchor: (f32, f32),
+    started: Option<std::time::Instant>,
+}
+impl HoverIntent {
+    pub const DELAY: std::time::Duration = std::time::Duration::from_millis(320);
+    pub fn update(
+        &mut self,
+        target: Option<usize>,
+        point: (f32, f32),
+        now: std::time::Instant,
+    ) -> bool {
+        let moved = (point.0 - self.anchor.0).hypot(point.1 - self.anchor.1) > 12.;
+        if target != self.target || moved {
+            self.target = target;
+            self.anchor = point;
+            self.started = target.map(|_| now);
+        }
+        self.started
+            .is_some_and(|start| now.saturating_duration_since(start) >= Self::DELAY)
+    }
+    pub fn remaining(&self, now: std::time::Instant) -> Option<std::time::Duration> {
+        self.started
+            .map(|t| (t + Self::DELAY).saturating_duration_since(now))
+            .filter(|d| !d.is_zero())
+    }
+}
+pub fn hovered_card(cards: &[Card; 6], moving: usize, point: (f32, f32)) -> Option<usize> {
+    cards.iter().enumerate().find_map(|(i, c)| {
+        (i != moving
+            && c.visible
+            && point.0 >= c.x as f32
+            && point.0 < (c.x + c.w) as f32
+            && point.1 >= c.y as f32
+            && point.1 < (c.y + c.h) as f32)
+            .then_some(i)
+    })
+}
+pub fn preview_free_move_in(
+    original: &[Card; 6],
+    i: usize,
+    mut proposed: Card,
+    cols: i32,
+    rows: i32,
+) -> Option<[Card; 6]> {
+    let source = *original.get(i)?;
+    proposed.w = source.w;
+    proposed.h = source.h;
+    let mut result = *original;
+    place_in(&mut result, i, proposed, cols, rows).then_some(result)
+}
+#[cfg(test)]
+mod hover_tests {
+    use super::*;
+    #[test]
+    fn pass_over_is_not_swap_but_stationary_hover_is() {
+        let mut intent = HoverIntent::default();
+        let now = std::time::Instant::now();
+        assert!(!intent.update(Some(1), (10., 10.), now));
+        assert!(!intent.update(Some(1), (40., 10.), now + HoverIntent::DELAY));
+        assert!(!intent.update(Some(2), (40., 10.), now + HoverIntent::DELAY));
+        assert!(intent.update(Some(2), (42., 10.), now + HoverIntent::DELAY * 2));
+        assert!(!intent.update(None, (42., 10.), now + HoverIntent::DELAY * 2));
+    }
+    #[test]
+    fn status_and_controls_share_minimum_width_and_height() {
+        for i in 1..5 {
+            assert_eq!(minimum(i), (5, 3));
+        }
     }
 }

@@ -15,6 +15,13 @@ pub struct SoundState {
     pub device: Option<String>,
     pub connection: Option<String>,
     pub status: String,
+    #[serde(default)]
+    pub eq_index: Option<u8>,
+    #[serde(default)]
+    pub eq_bands: Option<crate::eq::Snapshot>,
+    /// Forces delivery of an explicitly requested bank, even if values are unchanged.
+    #[serde(skip)]
+    pub eq_revision: u64,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct MixTarget {

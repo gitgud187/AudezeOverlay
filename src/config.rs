@@ -20,7 +20,8 @@ pub struct Config {
     pub background_opacity: u8,
     pub card_opacity: u8,
     pub background_blur: bool,
-    pub cards: [crate::layout::Card; 5],
+    #[serde(deserialize_with = "deserialize_cards")]
+    pub cards: [crate::layout::Card; 6],
     pub grid_rows: i32,
     pub grid_columns: i32,
     pub cell_width: f32,
@@ -35,6 +36,8 @@ pub struct Config {
     pub low_battery: u8,
     pub animations: bool,
     pub settings_page: usize,
+    pub status_icons: bool,
+    pub eq: crate::eq::Preferences,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -65,12 +68,24 @@ impl Default for Config {
             low_battery: 20,
             animations: true,
             settings_page: 0,
+            status_icons: false,
+            eq: crate::eq::Preferences::default(),
         }
     }
 }
 impl Config {
+    pub fn card_top(&self) -> f32 {
+        if self.status_icons {
+            98.
+        } else {
+            74.
+        }
+    }
+    pub fn vertical_padding(&self) -> f32 {
+        self.card_top() + 16.
+    }
     pub fn minimum_height(&self) -> u32 {
-        (90. + crate::layout::extent(&self.cards).1 as f32 * self.cell_height)
+        (self.vertical_padding() + crate::layout::extent(&self.cards).1 as f32 * self.cell_height)
             .ceil()
             .max(160.) as u32
     }
@@ -84,7 +99,7 @@ impl Config {
             ((width - 24.) / self.cell_width + 0.001)
                 .floor()
                 .clamp(1., 80.) as i32,
-            ((height - 90.) / self.cell_height + 0.001)
+            ((height - self.vertical_padding()) / self.cell_height + 0.001)
                 .floor()
                 .clamp(1., 80.) as i32,
         )
@@ -105,7 +120,7 @@ impl Config {
         {
             self.height = self
                 .height
-                .max((90. + rows as f32 * self.cell_height).ceil() as u32);
+                .max((self.vertical_padding() + rows as f32 * self.cell_height).ceil() as u32);
             self.fit_layout();
             true
         } else {
@@ -141,7 +156,7 @@ impl Config {
         c.grid_rows = c.grid_rows.clamp(1, 80);
         c.migrate_layout();
         c.low_battery = c.low_battery.min(50);
-        for i in 0..5 {
+        for i in 0..6 {
             let card = c.cards[i];
             if !card.visible {
                 continue;
@@ -158,14 +173,14 @@ impl Config {
                 break;
             }
         }
-        if (0..5).any(|i| {
-            (i + 1..5).any(|j| {
+        if (0..6).any(|i| {
+            (i + 1..6).any(|j| {
                 c.cards[i].visible && c.cards[j].visible && c.cards[i].overlaps(c.cards[j])
             })
         }) {
             c.cards = crate::layout::defaults();
         }
-        c.settings_page = c.settings_page.min(4);
+        c.settings_page = c.settings_page.min(5);
         c.fit_layout();
         c
     }
@@ -245,6 +260,18 @@ pub fn hotkey_label(mods: u32, vk: u32) -> String {
     };
     format!("{prefix}{key}")
 }
+fn deserialize_cards<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<[crate::layout::Card; 6], D::Error> {
+    let saved = Vec::<crate::layout::Card>::deserialize(d)?;
+    if !(5..=6).contains(&saved.len()) {
+        return Err(serde::de::Error::custom("Expected five or six cards"));
+    }
+    let mut cards = crate::layout::defaults();
+    cards[..saved.len()].copy_from_slice(&saved);
+    Ok(cards)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,6 +353,19 @@ mod tests {
             c.grid_columns,
             c.grid_rows
         ));
+    }
+    #[test]
+    fn existing_five_card_settings_keep_layout_and_add_hidden_eq() {
+        let current = Config::default();
+        let mut value = serde_json::to_value(&current).unwrap();
+        value["cards"].as_array_mut().unwrap().truncate(5);
+        value.as_object_mut().unwrap().remove("eq");
+        value.as_object_mut().unwrap().remove("status_icons");
+        let restored: Config = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.cards[..5], current.cards[..5]);
+        assert!(!restored.cards[5].visible);
+        assert!(!restored.status_icons);
+        assert!(restored.eq.show_factory);
     }
     #[test]
     fn one_or_two_keys_only() {

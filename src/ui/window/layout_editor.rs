@@ -1,7 +1,9 @@
 //! Pointer gestures and menus translate into pure grid operations.
 use super::*;
 pub(super) unsafe fn drag(app: &mut App, x: f32, y: f32) {
+    app.drag_point = (x, y);
     match app.drag {
+        Drag::EqBand(index) => set_eq_band(app, index, y),
         Drag::Setting(key) => set_slider(app, key, x),
         Drag::Mix => {
             let r = app.cards[0];
@@ -40,15 +42,46 @@ pub(super) unsafe fn drag(app: &mut App, x: f32, y: f32) {
                 if layout::resize_in(&mut cards, index, p, cols, rows) {
                     app.config.cards = cards;
                 }
-            } else if let Some(cards) = layout::preview_move_in(
-                &original_cards,
-                index,
-                p,
-                ((x - 12.) / cw, (y - 74.) / ch),
-                cols,
-                rows,
-            ) {
-                app.config.cards = cards;
+            } else {
+                let pointer = ((x - 12.) / cw, (y - app.config.card_top()) / ch);
+                let target = layout::hovered_card(&original_cards, index, pointer);
+                let now = Instant::now();
+                let swap = app.reorder_hover.update(target, (x, y), now);
+                let _ = KillTimer(Some(app.hwnd), REORDER);
+                if let Some(delay) = app.reorder_hover.remaining(now) {
+                    SetTimer(
+                        Some(app.hwnd),
+                        REORDER,
+                        delay.as_millis().max(1) as u32,
+                        None,
+                    );
+                }
+                let preview = if swap {
+                    layout::preview_move_in(&original_cards, index, p, pointer, cols, rows)
+                } else {
+                    layout::preview_free_move_in(&original_cards, index, p, cols, rows)
+                };
+                if let Some(cards) = preview {
+                    app.config.cards = cards;
+                }
+                let source = original_cards[index];
+                app.drag_preview = if swap && preview.is_some() {
+                    None
+                } else {
+                    Some((
+                        index,
+                        Box2::new(
+                            (12. + source.x as f32 * cw + 4. + x - sx)
+                                .clamp(0., (w - source.w as f32 * cw + 8.).max(0.)),
+                            (app.config.card_top() + source.y as f32 * ch + 4. + y - sy).clamp(
+                                app.config.card_top(),
+                                (h - source.h as f32 * ch + 8.).max(app.config.card_top()),
+                            ),
+                            source.w as f32 * cw - 8.,
+                            source.h as f32 * ch - 8.,
+                        ),
+                    ))
+                };
             }
             request_draw(app);
         }
@@ -62,6 +95,8 @@ pub(super) unsafe fn logical_size(app: &App) -> (f32, f32) {
     (r.right as f32 / s, r.bottom as f32 / s)
 }
 pub(super) unsafe fn finish_layout(app: &mut App) {
+    app.drag_preview = None;
+    let _ = KillTimer(Some(app.hwnd), REORDER);
     app.edit = false;
     app.drag = Drag::None;
     let _ = ReleaseCapture();
@@ -73,7 +108,7 @@ pub(super) unsafe fn finish_layout(app: &mut App) {
     request_draw(app);
 }
 pub(super) unsafe fn card_visibility(app: &mut App, i: usize, visible: bool) {
-    if i >= 5 {
+    if i >= 6 {
         return;
     }
     if visible {
@@ -85,6 +120,9 @@ pub(super) unsafe fn card_visibility(app: &mut App, i: usize, visible: bool) {
         if !app.edit {
             app.config.trim_canvas();
         }
+    }
+    if i == 5 && visible {
+        send(app, Command::EqRefresh);
     }
     save(app);
     if app.settings.is_none() {
@@ -131,7 +169,7 @@ pub(super) unsafe fn card_menu(app: &mut App, index: Option<usize>) {
     )
     .0;
     let _ = DestroyMenu(menu);
-    if (1..=5).contains(&id) {
+    if (1..=6).contains(&id) {
         let i = id as usize - 1;
         act(
             app,

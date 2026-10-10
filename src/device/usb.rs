@@ -17,6 +17,8 @@ pub struct Device {
     output_len: usize,
     reader: HANDLE,
     stream: Vec<u8>,
+    eq_slot: u8,
+    eq_read_slot: Option<u8>,
 }
 impl Drop for Device {
     fn drop(&mut self) {
@@ -34,19 +36,22 @@ pub enum Query {
     Noise,
     Mute,
     Battery,
+    EqIndex,
+    EqBands,
+    EqWriteAck,
 }
-/// An incomplete frame holds at most 127 bytes; the next report adds at most 61.
-/// Even at the six-byte minimum frame size, 32 slots cover that bounded input.
+/// An incomplete frame holds at most 191 bytes; the next report adds at most 61.
+/// Even at the six-byte minimum frame size, 64 slots cover that bounded input.
 /// Keeps duplicate fields in wire order for protocol diagnostics without allocating.
 #[derive(Debug)]
 pub struct QueryUpdates {
-    fields: [Query; 32],
+    fields: [Query; 64],
     len: usize,
 }
 impl Default for QueryUpdates {
     fn default() -> Self {
         Self {
-            fields: [Query::Mix; 32],
+            fields: [Query::Mix; 64],
             len: 0,
         }
     }
@@ -65,7 +70,7 @@ impl QueryUpdates {
 }
 impl IntoIterator for QueryUpdates {
     type Item = Query;
-    type IntoIter = std::iter::Take<std::array::IntoIter<Query, 32>>;
+    type IntoIter = std::iter::Take<std::array::IntoIter<Query, 64>>;
     fn into_iter(self) -> Self::IntoIter {
         self.fields.into_iter().take(self.len)
     }
@@ -186,7 +191,9 @@ impl Device {
                         input_len: caps.InputReportByteLength as usize,
                         reader: handle,
                         output_len: caps.OutputReportByteLength as usize,
-                        stream: Vec::with_capacity(128),
+                        stream: Vec::with_capacity(256),
+                        eq_slot: 6,
+                        eq_read_slot: None,
                     });
                 }
                 Err("Connect the Maxwell 2 ANC USB dongle.".into())
@@ -213,8 +220,14 @@ impl Device {
         }
         Ok(())
     }
-    pub fn query(&self, q: Query) -> Result<()> {
+    pub fn query(&mut self, q: Query) -> Result<()> {
+        self.eq_read_slot = (q == Query::EqBands).then_some(self.eq_slot);
         self.packet(match q {
+            Query::EqWriteAck => return Ok(()),
+            Query::EqIndex => &[5, 0x5a, 3, 0, 0x30, 0x2e, 0x0d],
+            Query::EqBands => {
+                return self.packet(&[5, 0x5a, 5, 0, 0x30, 0x2e, 0x32, self.eq_slot, 10])
+            }
             Query::Mix => &[5, 0x5a, 4, 0, 0x83, 0x2c, 0x0b, 0],
             Query::Side => &[5, 0x5a, 4, 0, 0x83, 0x2c, 7, 0],
             Query::Level => &[5, 0x5a, 4, 0, 1, 9, 0x2c, 0],
@@ -224,8 +237,24 @@ impl Device {
             Query::Battery => &[5, 0x5a, 3, 0, 0xd6, 0x0c, 0],
         })
     }
-    pub fn set(&self, c: &Command) -> Result<Query> {
+    pub fn set(&mut self, c: &Command) -> Result<Query> {
+        match c {
+            Command::EqLoad(slot) if (6..=9).contains(slot) => {
+                self.eq_slot = *slot;
+                return Ok(Query::EqBands);
+            }
+            Command::EqRefresh => return Ok(Query::EqIndex),
+            Command::EqGain { slot, band } => {
+                self.packet(&crate::eq::gain_command(*slot, *band)?)?;
+                self.eq_slot = *slot;
+                return Ok(Query::EqWriteAck);
+            }
+            _ => (),
+        }
         let (q, body) = match c {
+            Command::EqSelect(slot) if *slot < 10 => {
+                (Query::EqIndex, vec![5, 0x5a, 4, 0, 0x30, 0x2e, 0x0c, *slot])
+            }
             Command::Mix(p) if *p <= 100 => (
                 Query::Mix,
                 vec![
@@ -298,16 +327,24 @@ impl Device {
         &mut self,
         bytes: &[u8],
         state: &mut SoundState,
-        observed: impl FnMut(&[u8], Option<Query>, &SoundState),
+        mut observed: impl FnMut(&[u8], Option<Query>, &SoundState),
     ) -> QueryUpdates {
-        consume_report_bytes(&mut self.stream, bytes, state, observed)
+        let slot = self.eq_read_slot;
+        consume_report_bytes_with_slot(
+            &mut self.stream,
+            bytes,
+            state,
+            |frame, field, state| observed(frame, field, state),
+            slot,
+        )
     }
 }
-fn consume_report_bytes(
+fn consume_report_bytes_with_slot(
     stream: &mut Vec<u8>,
     bytes: &[u8],
     state: &mut SoundState,
     mut observed: impl FnMut(&[u8], Option<Query>, &SoundState),
+    eq_slot: Option<u8>,
 ) -> QueryUpdates {
     if bytes.len() < 3 || bytes[1] as usize > bytes.len() - 3 {
         return QueryUpdates::default();
@@ -323,14 +360,21 @@ fn consume_report_bytes(
             continue;
         }
         let len = u16::from_le_bytes([stream[2], stream[3]]) as usize + 4;
-        if !(6..=128).contains(&len) {
+        if !(6..=192).contains(&len) {
             stream.remove(0);
             continue;
         }
         if stream.len() < len {
             break;
         }
-        let q = parse_frame(&stream[..len], state);
+        let q = if let Some(snapshot) =
+            eq_slot.and_then(|slot| crate::eq::parse_bands(slot, &stream[..len]))
+        {
+            state.eq_bands = Some(snapshot);
+            Some(Query::EqBands)
+        } else {
+            parse_frame(&stream[..len], state)
+        };
         observed(&stream[..len], q, state);
         if let Some(q) = q {
             updated.push(q);
@@ -352,7 +396,7 @@ fn continuation_allowed(report: &[u8], stream: &[u8], already_extra: usize) -> b
         && (stream.len() < 2 || matches!(stream[1], 0x5b | 0x5d))
         && (stream.len() < 4 || {
             let expected = u16::from_le_bytes([stream[2], stream[3]]) as usize + 4;
-            (6..=128).contains(&expected) && stream.len() < expected
+            (6..=192).contains(&expected) && stream.len() < expected
         })
 }
 pub fn parse_frame(b: &[u8], s: &mut SoundState) -> Option<Query> {
@@ -391,6 +435,11 @@ pub fn parse_frame(b: &[u8], s: &mut SoundState) -> Option<Query> {
             }
             _ => return None,
         },
+        (0x30, 0x2e) if b.len() == 9 && b[6] == 0x0b && b[7] == 0 && b[8] == 0 => Query::EqWriteAck,
+        (0x30, 0x2e) if b.len() == 9 && b[6] == 0x0d && b[7] == 0 && b[8] < 10 => {
+            s.eq_index = Some(b[8]);
+            Query::EqIndex
+        }
         (0x30, 0x2e) if b.len() == 9 && b[6] == 2 && b[7] == 0 && b[8] <= 2 => {
             replace_text(&mut s.anc, ANC_MODES[b[8] as usize]);
             Query::Anc
@@ -405,8 +454,58 @@ pub fn parse_frame(b: &[u8], s: &mut SoundState) -> Option<Query> {
 }
 
 #[cfg(test)]
+fn consume_report_bytes(
+    stream: &mut Vec<u8>,
+    bytes: &[u8],
+    state: &mut SoundState,
+    observed: impl FnMut(&[u8], Option<Query>, &SoundState),
+) -> QueryUpdates {
+    consume_report_bytes_with_slot(stream, bytes, state, observed, None)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn eq_read_frames_use_q_before_gain_and_survive_fragmentation() {
+        let mut expected = crate::eq::sample(8);
+        expected.bands[3].q = 1.41;
+        expected.bands[3].gain = -4.;
+        let mut wire = vec![5, 0x5b, 143, 0, 0x30, 0x2e, 0x32];
+        for band in expected.bands {
+            wire.extend_from_slice(&[band.id, band.kind]);
+            wire.extend_from_slice(&band.frequency.to_le_bytes());
+            wire.extend_from_slice(&band.q.to_le_bytes());
+            wire.extend_from_slice(&band.gain.to_le_bytes());
+        }
+        for chunk_size in 1..=61 {
+            let mut stream = vec![];
+            let mut state = SoundState::default();
+            for payload in wire.chunks(chunk_size) {
+                let mut report = vec![7, payload.len() as u8, 0x80];
+                report.extend_from_slice(payload);
+                consume_report_bytes_with_slot(
+                    &mut stream,
+                    &report,
+                    &mut state,
+                    |_, _, _| {},
+                    Some(8),
+                );
+            }
+            assert_eq!(state.eq_bands, Some(expected));
+            assert!(stream.is_empty());
+        }
+        let mut unsolicited = SoundState::default();
+        let mut stream = vec![];
+        for payload in wire.chunks(59) {
+            let mut report = vec![7, payload.len() as u8, 0x80];
+            report.extend_from_slice(payload);
+            consume_report_bytes(&mut stream, &report, &mut unsolicited, |_, _, _| {});
+        }
+        assert_eq!(unsolicited.eq_bands, None);
+        wire[21] = 0; // Duplicate band ID.
+        assert!(crate::eq::parse_bands(8, &wire).is_none());
+    }
     #[test]
     fn fragments_preserve_each_mix_value_at_every_split_boundary() {
         let frames = [

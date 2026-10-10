@@ -13,10 +13,25 @@ pub const CONTROL_MESSAGE: u32 = WM_APP + 5;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Mix(u8),
+    EqSelect(u8),
+    EqRefresh,
+    EqLoad(u8),
+    EqGain { slot: u8, band: crate::eq::Band },
     Sidetone(bool),
     SidetoneLevel(u8),
     Anc(String),
     Noise(String),
+}
+impl Command {
+    /// A band edit replaces only the same band's queued edit, never other bands.
+    pub(crate) fn supersedes(&self, old: &Self) -> bool {
+        match (self, old) {
+            (Self::EqGain { slot: a, band: x }, Self::EqGain { slot: b, band: y }) => {
+                a == b && x.id == y.id
+            }
+            _ => std::mem::discriminant(self) == std::mem::discriminant(old),
+        }
+    }
 }
 #[derive(Clone)]
 pub(crate) struct QueuedCommand {
@@ -42,8 +57,7 @@ impl Controller {
         let mut queue = self.pending.lock().unwrap();
         // A drag needs the latest position, not a backlog of obsolete positions.
         let sequence = self.sequence.fetch_add(1, Ordering::Relaxed) + 1;
-        queue
-            .retain(|old| std::mem::discriminant(&old.command) != std::mem::discriminant(&command));
+        queue.retain(|old| !command.supersedes(&old.command));
         queue.push_back(QueuedCommand { sequence, command });
         drop(queue);
         let _ = self.wake.try_send(());

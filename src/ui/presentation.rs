@@ -7,7 +7,7 @@ use audeze_overlay::{
 use std::time::Instant;
 
 pub struct AnimationFrame {
-    pub cards: [Box2; 5],
+    pub cards: [Box2; 6],
     pub grip: f32,
     pub previous_mix: Option<(u8, u8)>,
     pub number_progress: f32,
@@ -16,8 +16,8 @@ pub struct AnimationFrame {
     pub active: bool,
 }
 pub struct Presentation {
-    cards_from: [Box2; 5],
-    cards_to: Option<[Box2; 5]>,
+    cards_from: [Box2; 6],
+    cards_to: Option<[Box2; 6]>,
     cards_started: Instant,
     grip: Tween,
     current_mix: Option<(u8, u8)>,
@@ -30,7 +30,7 @@ impl Default for Presentation {
     fn default() -> Self {
         let now = Instant::now();
         Self {
-            cards_from: [Box2::default(); 5],
+            cards_from: [Box2::default(); 6],
             cards_to: None,
             cards_started: now,
             grip: Tween::new(0., now),
@@ -43,7 +43,7 @@ impl Default for Presentation {
     }
 }
 impl Presentation {
-    fn card_frame(&self, now: Instant, animate: bool) -> [Box2; 5] {
+    fn card_frame(&self, now: Instant, animate: bool) -> [Box2; 6] {
         let to = self.cards_to.unwrap_or(self.cards_from);
         let p = if animate {
             ease(progress(self.cards_started, now, 130))
@@ -63,7 +63,7 @@ impl Presentation {
     }
     pub fn frame(
         &mut self,
-        cards: [Box2; 5],
+        cards: [Box2; 6],
         sound: &SoundState,
         grabbed: bool,
         animate: bool,

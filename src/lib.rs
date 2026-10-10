@@ -7,3 +7,5 @@ pub mod layout;
 pub mod legacy;
 pub mod model;
 pub mod motion;
+
+pub mod eq;

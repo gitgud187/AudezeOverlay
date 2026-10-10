@@ -122,13 +122,20 @@ pub(super) fn settings_page(
     h: f32,
     section: usize,
 ) {
-    const TABS: [&str; 5] = [
+    const TABS: [&str; 6] = [
         "Appearance",
         "Cards & layout",
         "Notifications",
         "Shortcuts",
         "Startup & device",
+        "Equalizer",
     ];
+    c.rect(
+        Box2::new(208., 82., w - 224., h - 126.),
+        0x161616,
+        v.config.card_opacity as f32 / 100.,
+        8.,
+    );
     c.line(&[(198., 82.), (198., h - 30.)], 0x353535, 1., 1.);
     for (i, name) in TABS.iter().enumerate() {
         button(
@@ -155,6 +162,7 @@ pub(super) fn settings_page(
         2 => "Choose when the overlay appears while you play.",
         3 => "Record a key or a modifier + key, then click End recording.",
         4 => "The USB dongle connects directly. The Audeze app can stay closed.",
+        5 => "Choose an EQ, pin quick switches, or tune a custom headset slot.",
         _ => "",
     };
     c.text(
@@ -234,20 +242,21 @@ pub(super) fn settings_page(
             );
         }
         1 => {
-            for i in 0..5 {
-                let keys = ["card0", "card1", "card2", "card3", "card4"];
+            for i in 0..6 {
+                let keys = ["card0", "card1", "card2", "card3", "card4", "card5"];
                 let help = [
                     "Circular balance control for game and voice chat.",
                     "Hear your microphone in the headset and adjust its level.",
                     "Switch ANC on, off, or into Transparency mode.",
                     "Reduce background noise picked up by your microphone.",
                     "Headset name, USB connection, battery, and microphone status.",
+                    "Quick EQ switching and a shortcut to the custom EQ editor.",
                 ];
                 toggle_row(
                     c,
                     hits,
                     v,
-                    178. + i as f32 * 69.,
+                    174. + i as f32 * 54.,
                     w,
                     layout::NAMES[i],
                     help[i],
@@ -255,11 +264,22 @@ pub(super) fn settings_page(
                     v.config.cards[i].visible,
                 );
             }
+            toggle_row(
+                c,
+                hits,
+                v,
+                504.,
+                w,
+                "Status icons under logo",
+                "Show USB, battery and microphone icons. The status card can stay on too.",
+                "status-icons",
+                v.config.status_icons,
+            );
             row(
                 c,
                 hits,
                 v,
-                528.,
+                566.,
                 w,
                 "Grid rows",
                 "Adds empty room below the cards. Finish editing to trim unused room.",
@@ -271,7 +291,7 @@ pub(super) fn settings_page(
                 c,
                 hits,
                 v,
-                Box2::new(218., 610., 172., 36.),
+                Box2::new(218., 648., 172., 36.),
                 "Edit card layout",
                 Action::Edit,
                 false,
@@ -280,7 +300,7 @@ pub(super) fn settings_page(
                 c,
                 hits,
                 v,
-                Box2::new(402., 610., 172., 36.),
+                Box2::new(402., 648., 172., 36.),
                 "Reset card layout",
                 Action::Setting("reset-layout", 0),
                 false,
@@ -518,7 +538,7 @@ pub(super) fn settings_page(
                 Action::ResetApp,
                 false,
             );
-            c.text("Reset app restores all preferences, layout and shortcuts. Headset sound is unchanged.", Box2::new(218., 610., w - 250., 40.), 13., SUB, false, false);
+            c.text("Reset app restores all preferences, layout and shortcuts. Headset sound is unchanged.", Box2::new(218., 630., w - 250., 40.), 13., SUB, false, false);
             c.text(
                 "Connection: Maxwell 2 ANC USB dongle",
                 Box2::new(218., 651., w - 250., 24.),
@@ -528,10 +548,13 @@ pub(super) fn settings_page(
                 false,
             );
         }
+        5 => super::equalizer::page(c, hits, v, w),
         _ => (),
     }
     let note = if v.note.is_empty() {
-        if v.settings == Some(2) {
+        if v.settings == Some(5) {
+            ""
+        } else if v.settings == Some(2) {
             "Click a time to type milliseconds. Enter saves; Escape cancels."
         } else {
             "Sliders: drag or scroll in steps of 5. Changes save automatically."

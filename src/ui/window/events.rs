@@ -226,6 +226,8 @@ pub(super) unsafe fn dispatch(
         }
         WM_LBUTTONUP => {
             if !matches!(app.drag, Drag::None) {
+                app.drag_preview = None;
+                let _ = KillTimer(Some(hwnd), REORDER);
                 app.drag = Drag::None;
                 let _ = ReleaseCapture();
                 save(app);
@@ -238,6 +240,8 @@ pub(super) unsafe fn dispatch(
                 save(app);
             }
             app.drag = Drag::None;
+            app.drag_preview = None;
+            let _ = KillTimer(Some(hwnd), REORDER);
             request_draw(app);
             Some(LRESULT(0))
         }
@@ -252,6 +256,12 @@ pub(super) unsafe fn dispatch(
                         let (value, min, max) = dashboard::slider(&app.config, key);
                         slider_value(app, key, (value + steps as f32 * 5.).clamp(min, max));
                         save(app);
+                    }
+                    Action::EqBand(index) => {
+                        if let Some(d) = app.eq_editor.draft_mut() {
+                            d.set_gain(index, d.value.bands[index].gain + steps as f32);
+                        }
+                        request_draw(app);
                     }
                     Action::Mix => {
                         set_mix(app, (app.mix_to as i32 + steps * 5).clamp(0, 100) as u8)
@@ -270,6 +280,24 @@ pub(super) unsafe fn dispatch(
         }
         WM_KEYDOWN | WM_SYSKEYDOWN if app.recording => {
             record(app, w.0 as u32);
+            request_draw(app);
+            Some(LRESULT(0))
+        }
+        WM_KEYDOWN if app.eq_editor.name_edit.is_some() => {
+            if w.0 == VK_RETURN.0 as usize {
+                commit_eq_name(app);
+            } else if w.0 == VK_ESCAPE.0 as usize {
+                app.eq_editor.name_edit = None;
+            } else if w.0 == 0x41 && GetKeyState(VK_CONTROL.0 as i32) < 0 {
+                app.eq_editor.name_selected = true;
+            }
+            request_draw(app);
+            Some(LRESULT(0))
+        }
+        WM_CHAR if app.eq_editor.name_edit.is_some() => {
+            if let Some(ch) = char::from_u32(w.0 as u32) {
+                type_eq_name(app, ch);
+            }
             request_draw(app);
             Some(LRESULT(0))
         }
@@ -301,6 +329,7 @@ pub(super) unsafe fn dispatch(
             Some(LRESULT(0))
         }
         WM_KILLFOCUS => {
+            commit_eq_name(app);
             app.recording = false;
             if !commit_number(app) {
                 app.number_edit = None;
@@ -314,6 +343,14 @@ pub(super) unsafe fn dispatch(
                 request_draw(app);
             } else if w.0 as i32 == app.hotkey_id {
                 toggle(app);
+            }
+            Some(LRESULT(0))
+        }
+        WM_TIMER if w.0 == REORDER => {
+            let _ = KillTimer(Some(hwnd), REORDER);
+            if matches!(app.drag, Drag::Card { resize: false, .. }) {
+                let (x, y) = app.drag_point;
+                drag(app, x, y);
             }
             Some(LRESULT(0))
         }
@@ -378,6 +415,9 @@ pub(super) unsafe fn dispatch(
         CONTROL_MESSAGE => {
             if let Some(c) = &app.controller {
                 app.note = c.last_error().unwrap_or_default();
+                if !app.note.is_empty() {
+                    app.eq_editor.failed();
+                }
             }
             request_draw(app);
             Some(LRESULT(0))

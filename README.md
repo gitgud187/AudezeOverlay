@@ -35,7 +35,8 @@ Drag the header to move the overlay. Click the **grid icon beside the gear**
 to edit the layout. Drag cards to move them, their bottom-right corners to
 resize them, or window edges/corners to resize the entire panel. Click the
 grid icon again to finish. Cards snap to a grid and cannot overlap.
-Drop a card onto another to swap their slots. Larger cards compact to fit and
+Hold a card over another for 320 ms to preview an animated swap. Dragging past
+a card does not immediately swap it; release after the preview to keep the swap. Larger cards compact to fit and
 nearby cards move into the space left behind. Dragging into empty space keeps
 the card's size. A layout that
 cannot keep every control readable stays at the last valid arrangement.
@@ -49,7 +50,8 @@ separate option for making the cards themselves larger or smaller.
 In layout editing, click a card's **… → Remove card** to hide it. Use **+**
 beside the grid icon to add it back; the window makes room if needed. Hidden
 cards also appear in **Settings → Cards & layout**. Minimum dimensions keep
-controls readable.
+controls readable. Status and the other rectangular cards share the same minimum
+width and height; the circular mix card keeps a larger minimum height.
 Position, size and card arrangement are saved. **Reset position** recovers an
 off-screen panel. **Reset layout** restores the original card arrangement.
 
@@ -63,15 +65,17 @@ save immediately.
 | Page | Options |
 | --- | --- |
 | Appearance | Interface scale, text size, background opacity, card opacity, background blur, animations |
-| Cards & layout | Card visibility, grid rows, edit layout, reset layout |
+| Cards & layout | Card visibility, status icons beneath the logo, grid rows, edit layout, reset layout |
 | Notifications | Master popup switch, mix/sidetone/ANC/FILTER/mute triggers, time before hiding, fade duration, preview |
 | Shortcuts | Record the show/hide hotkey |
+| Equalizer | Quick-switch pins, factory-preset visibility, custom names, ten-band tuning and headset save |
 | Startup & device | Launch with Windows, monitor, edge snapping, position lock, low-battery threshold, reset position, Reset app |
 
 Opacity changes by 5 percentage points; timing by 5 milliseconds (1000 ms =
 1 second). Zero fade duration hides immediately. Zero low-battery threshold
 disables that alert. Text stays solid when opacity changes. Blur softens the
-scene behind transparent areas using Windows composition. Turn it off for
+scene behind transparent areas using Windows composition. Settings pages use
+the same outer opacity, card opacity and blur preferences as the sound overlay. Turn it off for
 clear transparency. Windows controls the blur radius. The panel and acrylic
 use matching native rounded corners; Windows may draw a soft shadow around them.
 
@@ -91,8 +95,39 @@ Typed values can use single-millisecond precision while sliders retain steps of 
 preferences, layout and shortcut. It does not change headset sound settings.
 Factory defaults use 70% outer background and 70% card opacity; startup is off.
 
+Device status can appear as icons beneath the logo, a card, or both; choose
+these independently in **Cards & layout**.
+
+## Equalizer
+
+Add **Equalizer** with the **+** button or in Cards & layout. Its preset button
+opens your pinned quick switches; **Edit** opens the same editor as
+**Settings → Equalizer**. Six factory presets are read-only. Four custom slots
+load their ten existing bands directly from the headset (32 Hz to 16 kHz).
+
+Select a custom slot, drag or scroll band sliders from −12 to +12 dB, then
+press **Save to headset**. Tuning stays in a local draft until saved; **Discard**
+restores the loaded curve and **Flat** prepares a zero-gain curve. **Use EQ**
+activates the selected preset. Changes to an active slot become audible as
+they are saved. Unsaved drafts survive switching between slots during the app
+session, but are not retained after quitting.
+
+Click a custom name to rename it; Enter or clicking elsewhere saves, Escape
+cancels. Names and pins are local overlay preferences. Use the pin buttons to
+choose quick switches, and **Include factory EQs** to hide/show the factory
+choices in that menu. EQ curves themselves are stored in the headset.
+
+EQ is loaded only when opening or using EQ controls. It adds no continuous
+polling; changes made elsewhere are refreshed when those controls reopen.
+Writes preserve untouched bands, wait for the device acknowledgment, and verify
+changed bands by reading them back. A firmware write can briefly delay other
+USB requests while the headset stores the change.
+Saving multiple bands yields to overdue mix reads between bands. Routine mix,
+other-sound, and battery polling intervals remain unchanged.
+
 Cards animate between grid positions. The dial expands while held and has an
-inner position marker. Selection fills follow the direction of the button change.
+inner position marker. Mix digits roll up or down in place like an odometer,
+while the slash stays still. Selection fills follow the direction of the button change.
 Disable **Appearance → Smooth animations** for immediate transitions.
 
 ## Performance and compatibility

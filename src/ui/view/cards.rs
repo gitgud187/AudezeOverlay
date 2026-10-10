@@ -2,9 +2,22 @@
 use super::*;
 pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usize, r: Box2) {
     let fs = v.config.text_scale as f32 / 100.;
-    let pad = 16.;
+    let short = i != 0 && r.h < 110.;
+    let pad = if short { 8. } else { 16. };
     let inner = r.inset(pad);
-    let label = 18. * fs;
+    let mut label = if short { 16. * fs } else { 18. * fs };
+    let label_width = inner.w - if v.edit { 28. } else { 0. };
+    while label > 14. {
+        let px = (label * c.scale).round().max(1.);
+        let measured: f32 = layout::NAMES[i]
+            .chars()
+            .map(|ch| c.painter.fonts[1].metrics(ch, px).advance_width / c.scale)
+            .sum();
+        if measured <= label_width {
+            break;
+        }
+        label -= 0.5;
+    }
     if i != 4 {
         c.text(
             layout::NAMES[i],
@@ -92,38 +105,12 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
                 50.,
             );
             let transition = v.animation.map(|f| f.number_progress).unwrap_or(1.);
-            if transition < 1. {
-                if let Some((game, chat)) = v.animation.and_then(|f| f.previous_mix) {
-                    c.text_alpha(
-                        &format!("{game} / {chat}"),
-                        Box2::new(
-                            value_rect.x,
-                            value_rect.y - transition * 5.,
-                            value_rect.w,
-                            value_rect.h,
-                        ),
-                        value_size,
-                        FG,
-                        true,
-                        true,
-                        (1. - transition) * 0.35,
-                    );
-                }
+            if let Some(current) = v.sound.mix {
+                let previous = v.animation.and_then(|f| f.previous_mix).unwrap_or(current);
+                odometer(c, value_rect, value_size, previous, current, transition);
+            } else {
+                c.text(&value, value_rect, value_size, FG, true, true);
             }
-            c.text_alpha(
-                &value,
-                Box2::new(
-                    value_rect.x,
-                    value_rect.y + (1. - transition) * 5.,
-                    value_rect.w,
-                    value_rect.h,
-                ),
-                value_size,
-                FG,
-                true,
-                true,
-                0.65 + 0.35 * transition,
-            );
             if !compact {
                 c.text(
                     "GAME / CHAT",
@@ -169,7 +156,12 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
             switch(
                 c,
                 hits,
-                Box2::new(r.x + r.w - 66., r.y + 16., 48., 26.),
+                Box2::new(
+                    r.x + r.w - 66.,
+                    r.y + pad,
+                    48.,
+                    if short { 22. } else { 26. },
+                ),
                 v.sound.sidetone == Some(true),
                 Action::Side,
             );
@@ -180,13 +172,13 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
                 .unwrap_or_else(|| "Level —".into());
             c.text(
                 &value,
-                Box2::new(inner.x, r.y + 49., inner.w, 25.),
+                Box2::new(inner.x, r.y + if short { 33. } else { 49. }, inner.w, 25.),
                 16. * fs,
                 SUB,
                 false,
                 false,
             );
-            let y = r.y + r.h - 22.;
+            let y = r.y + r.h - if short { 12. } else { 22. };
             c.line(&[(inner.x, y), (inner.x + inner.w, y)], 0x454545, 1., 4.);
             let p = v.sound.sidetone_level.unwrap_or(0) as f32 / 100.;
             c.line(
@@ -257,7 +249,8 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
                     Box2::new(inner.x, y + 44., inner.w, 36.),
                 ];
             } else {
-                let y = r.y + r.h - 52.;
+                let button_height = if short { 28. } else { 36. };
+                let y = r.y + r.h - button_height - if short { 8. } else { 16. };
                 let extra = (inner.w - 20. - measured.iter().sum::<f32>() - padding * 6.).max(0.);
                 let mut x = inner.x;
                 for j in 0..3 {
@@ -266,7 +259,7 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
                     } else {
                         (inner.w - 20.) / 3.
                     };
-                    boxes[j] = Box2::new(x, y, width, 36.);
+                    boxes[j] = Box2::new(x, y, width, button_height);
                     x += width + 10.;
                 }
             }
@@ -387,8 +380,24 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
                     true,
                     false,
                 );
+                let compact_status = if inner.w < 250. {
+                    format!(
+                        "{} · {}",
+                        v.sound
+                            .battery
+                            .map(|b| format!("{b}%"))
+                            .unwrap_or_else(|| "—".into()),
+                        match v.sound.muted {
+                            Some(true) => "Muted",
+                            Some(false) => "Mic live",
+                            None => "Mic —",
+                        }
+                    )
+                } else {
+                    format!("{battery} · {mute}")
+                };
                 c.text(
-                    &format!("{battery} · {mute}"),
+                    &compact_status,
                     Box2::new(inner.x, inner.y + 29., inner.w, 24.),
                     14. * fs,
                     SUB,
@@ -397,6 +406,178 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
                 );
             }
         }
+        5 => super::equalizer::card(c, hits, v, r),
         _ => (),
+    }
+}
+
+/// Compact vector status indicators; no icon fonts or extra runtime resources.
+pub(super) fn status_icons(c: &mut Canvas, v: &View) {
+    let y = 63.;
+    let ink = if v.sound.mix.is_some() { FG } else { SUB };
+    // USB connection.
+    c.line(&[(36., y + 7.), (36., y - 7.), (32., y - 3.)], ink, 1., 1.6);
+    c.line(&[(36., y - 7.), (40., y - 3.)], ink, 1., 1.6);
+    c.line(&[(36., y + 3.), (42., y), (42., y - 3.)], ink, 1., 1.6);
+    c.circle(36., y + 7., 2., ink, 1.);
+    c.text(
+        if v.sound.mix.is_some() {
+            "USB"
+        } else {
+            "Offline"
+        },
+        Box2::new(48., y - 8., 54., 20.),
+        14.,
+        ink,
+        true,
+        false,
+    );
+    // Battery outline and charge fill.
+    c.line(
+        &[
+            (110., y - 6.),
+            (130., y - 6.),
+            (130., y + 6.),
+            (110., y + 6.),
+            (110., y - 6.),
+        ],
+        ink,
+        1.,
+        1.5,
+    );
+    c.rect(Box2::new(131., y - 3., 2., 6.), ink, 1., 0.);
+    if let Some(b) = v.sound.battery {
+        c.rect(
+            Box2::new(113., y - 3., 14. * b as f32 / 100., 6.),
+            ink,
+            1.,
+            0.,
+        );
+    }
+    c.text(
+        &v.sound
+            .battery
+            .map(|b| format!("{b}%"))
+            .unwrap_or_else(|| "—".into()),
+        Box2::new(141., y - 8., 50., 20.),
+        14.,
+        ink,
+        true,
+        false,
+    );
+    // Microphone plus a diagonal stroke when muted.
+    c.rect(Box2::new(202., y - 7., 6., 10.), ink, 1., 3.);
+    c.arc(205., y, 7., 0., 180., ink, 1., 1.4);
+    c.line(
+        &[
+            (205., y + 7.),
+            (205., y + 10.),
+            (201., y + 10.),
+            (209., y + 10.),
+        ],
+        ink,
+        1.,
+        1.4,
+    );
+    if v.sound.muted == Some(true) {
+        c.line(&[(198., y - 8.), (213., y + 9.)], ink, 1., 1.6);
+    }
+    c.text(
+        match v.sound.muted {
+            Some(true) => "Muted",
+            Some(false) => "Mic live",
+            None => "Mic —",
+        },
+        Box2::new(222., y - 8., 84., 20.),
+        14.,
+        ink,
+        true,
+        false,
+    );
+}
+
+fn odometer(c: &mut Canvas, r: Box2, size: f32, old: (u8, u8), new: (u8, u8), p: f32) {
+    let digits = |n: u8| {
+        if n == 100 {
+            3
+        } else if n >= 10 {
+            2
+        } else {
+            1
+        }
+    };
+    let game_columns = digits(new.0).max(if p < 1. { digits(old.0) } else { 0 });
+    let chat_columns = digits(new.1).max(if p < 1. { digits(old.1) } else { 0 });
+    let columns = game_columns + chat_columns + 1;
+    let cell = (r.w / columns as f32).min(size * 0.76);
+    let mut size = size;
+    while size > 10. {
+        let px = (size * c.scale).round().max(1.);
+        let width = ('0'..='9')
+            .chain(Some('/'))
+            .map(|ch| c.painter.fonts[1].metrics(ch, px).advance_width / c.scale)
+            .fold(0., f32::max);
+        if width + 1. <= cell {
+            break;
+        }
+        size -= 0.5;
+    }
+    let left = r.x + (r.w - cell * columns as f32) / 2.;
+    let clip = Box2::new(left, r.y, cell * columns as f32, size + 8.);
+    c.text_clipped(
+        "/",
+        Box2::new(left + cell * game_columns as f32, r.y, cell, r.h),
+        size,
+        FG,
+        true,
+        true,
+        clip,
+    );
+    for (side, before, after) in [(0, old.0, new.0), (game_columns + 1, old.1, new.1)] {
+        let a = if side == 0 {
+            format!("{before:>game_columns$}")
+        } else {
+            format!("{before:<chat_columns$}")
+        };
+        let b = if side == 0 {
+            format!("{after:>game_columns$}")
+        } else {
+            format!("{after:<chat_columns$}")
+        };
+        let direction = if after >= before { -1. } else { 1. };
+        for (column, (a, b)) in a.chars().zip(b.chars()).enumerate() {
+            let x = left + (side + column) as f32 * cell;
+            if a == b || p >= 1. {
+                c.text_clipped(
+                    &b.to_string(),
+                    Box2::new(x, r.y, cell, r.h),
+                    size,
+                    FG,
+                    true,
+                    true,
+                    clip,
+                );
+            } else {
+                let distance = size + 8.;
+                c.text_clipped(
+                    &a.to_string(),
+                    Box2::new(x, r.y + direction * p * distance, cell, r.h),
+                    size,
+                    FG,
+                    true,
+                    true,
+                    clip,
+                );
+                c.text_clipped(
+                    &b.to_string(),
+                    Box2::new(x, r.y - direction * (1. - p) * distance, cell, r.h),
+                    size,
+                    FG,
+                    true,
+                    true,
+                    clip,
+                );
+            }
+        }
     }
 }

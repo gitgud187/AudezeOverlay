@@ -9,6 +9,7 @@ official Audeze application. Dependencies point toward data and domain rules.
 | Area | Responsibility | Start here |
 | --- | --- | --- |
 | Domain | Sound readings, change detection, optimistic mix reconciliation | `src/model.rs` |
+| Equalizer | Validated band data, wire encoding, local drafts and pin preferences | `src/eq.rs` |
 | Layout | Grid placement, minimum sizes, swaps, compaction | `src/layout.rs` |
 | Input | Editable numeric drafts and validation | `src/input.rs` |
 | Motion | Time-based easing and directional selection transitions | `src/motion.rs` |
@@ -23,6 +24,7 @@ official Audeze application. Dependencies point toward data and domain rules.
 | Native events | Win32 messages, guarded state access, event translation | `src/ui/window/events.rs` |
 | Painting | GDI resource ownership and layered-window presentation | `src/ui/window/painting.rs` |
 | Layout adapter | Pointer gestures and native card menus | `src/ui/window/layout_editor.rs` |
+| EQ adapter | On-demand bank loads, draft gestures, save actions and native quick menu | `src/ui/window/equalizer.rs` |
 | Settings adapter | Apply preferences, hotkeys, typed values and reset | `src/ui/window/settings.rs` |
 | Windows services | Startup registry entry and composition effects | `src/platform/` |
 | Diagnostics | Explicit opt-in executables, previews and hardware probes | `src/bin/` |
@@ -38,7 +40,8 @@ folder: modules provide useful boundaries without a workspace of tiny packages.
 2. The application translates that action into a layout operation, preference
    change, or device `Command`.
 3. A sound command enters `Controller`. A newer command of the same kind replaces
-   an obsolete queued one, so dragging does not build a long backlog.
+   an obsolete queued one, so dragging does not build a long backlog. EQ edits
+   coalesce by slot and band ID, preserving edits to other bands.
 4. The worker performs USB work and updates shared `SoundState`, then posts a
    Windows message. The UI never waits for USB inside its event callback.
 5. Mix reconciliation keeps a new local target from being replaced by an older
@@ -96,3 +99,13 @@ focus, click-through, resizing, hotkeys and callback re-entry using sample data.
 USB diagnostics are separate because physical hardware and firmware timing
 cannot be reproduced by the unit tests. Never run a control-changing diagnostic
 as an ordinary CI test.
+
+## EQ data ownership
+
+The headset owns four custom EQ banks. `SoundState` carries the latest read bank,
+while `eq::Editor` keeps up to four independent drafts in the UI. Loading another
+bank never overwrites an unsaved draft. Only Save emits typed band commands;
+readbacks of every changed band must match the target before a draft is marked
+saved. Untouched bands refresh from the latest readback. EQ
+queries are on demand and excluded from routine polling. Reads and writes use
+different gain/Q byte order, covered by protocol tests and hardware diagnostics.
