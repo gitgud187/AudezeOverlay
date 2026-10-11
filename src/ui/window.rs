@@ -205,6 +205,13 @@ unsafe fn run() -> Result<()> {
         }
     }
     let remembered_page = config.settings_page;
+    let startup_note = if demo {
+        String::new()
+    } else {
+        crate::platform::startup::reconcile(config.autostart)
+            .err()
+            .unwrap_or_default()
+    };
     let app = App {
         hwnd: HWND::default(),
         config,
@@ -240,7 +247,7 @@ unsafe fn run() -> Result<()> {
         edit: false,
         interactive: false,
         hover: Action::None,
-        note: String::new(),
+        note: startup_note,
         recording: false,
         recorded_key: None,
         number_edit: None,

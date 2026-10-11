@@ -254,6 +254,7 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                 bluetooth = super::bluetooth_status::connected();
             }
             let mut retry_after = Duration::from_secs(2);
+            let mut unavailable = None;
             let result = (|| -> Result<()> {
                 let mut device = Device::open()?;
                 let mut restore_mix =
@@ -269,7 +270,8 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                         due[i] = None;
                     }
                 }
-                let mut last_good = Instant::now();
+                let opened_at = Instant::now();
+                let mut last_good = None;
                 let mut waiting: Vec<(Query, Instant, QueuedCommand)> = vec![];
                 let mut flight: Option<(Query, Instant, u64)> = None;
                 let mut write_ready = Instant::now();
@@ -569,7 +571,7 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                     }
                     if updated_fields != 0 {
                         state_may_have_changed = true;
-                        last_good = Instant::now();
+                        last_good = Some(Instant::now());
                         if state.status.is_empty() {
                             state.status = "Direct USB · Audeze app not required".into();
                         }
@@ -639,10 +641,13 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                     } else if updated_fields & (1 << Query::EqIndex as u8) != 0 {
                         eq_retry = Some(Instant::now() + Duration::from_millis(60));
                     }
-                    if last_good.elapsed() > Duration::from_secs(3) {
-                        return Err("Headset asleep or disconnected. Reconnecting…".into());
+                    if last_good.unwrap_or(opened_at).elapsed() > Duration::from_secs(3) {
+                        unavailable = Some(state.waiting_for_controls());
+                        return Err("Headset controls are not responding. Retrying…".into());
                     }
-                    if state_may_have_changed {
+                    // A timed-out battery read is not evidence of a live link.
+                    // Do not alternate an empty initial snapshot with retry status.
+                    if state_may_have_changed && last_good.is_some() {
                         let mut out = shared.lock().unwrap();
                         if *out != state {
                             *out = state.clone();
@@ -712,7 +717,7 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                 }
             })();
             if let Err(e) = result {
-                *shared.lock().unwrap() = SoundState {
+                let next = unavailable.unwrap_or_else(|| SoundState {
                     status: if bluetooth.is_some() {
                         "Bluetooth connected to Windows. Sound controls require a USB cable or dongle.".into()
                     } else {
@@ -723,8 +728,16 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                     transport: bluetooth.map(|_| crate::model::Connection::Bluetooth),
                     connection: bluetooth.map(|_| "Bluetooth (Windows)".into()),
                     ..Default::default()
-                };
-                post(hwnd, STATUS_MESSAGE);
+                });
+                let mut current = shared.lock().unwrap();
+                let changed = *current != next;
+                if changed {
+                    *current = next;
+                }
+                drop(current);
+                if changed {
+                    post(hwnd, STATUS_MESSAGE);
+                }
                 worker.pending.lock().unwrap().clear();
                 let _ = rx.recv_timeout(retry_after);
             }

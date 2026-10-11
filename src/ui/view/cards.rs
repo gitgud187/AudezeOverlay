@@ -485,17 +485,7 @@ pub(super) fn status_icons(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, width:
         c.circle(x, y + 6., 2., ink, 1.);
     }
     c.fitted_text(
-        if v.sound.transport == Some(audeze_overlay::model::Connection::Bluetooth) {
-            "Bluetooth"
-        } else if v.sound.mix.is_some() {
-            if v.sound.transport == Some(audeze_overlay::model::Connection::WiredUsb) {
-                "Wired"
-            } else {
-                "Wireless"
-            }
-        } else {
-            "Offline"
-        },
+        v.sound.connection_label(),
         Box2::new(row.x + 20., y - 8., step - 22., 20.),
         13.,
         ink,

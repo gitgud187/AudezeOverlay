@@ -103,6 +103,33 @@ pub fn reconcile_mix(target: &mut Option<MixTarget>, incoming: &mut SoundState) 
     }
 }
 impl SoundState {
+    /// The USB endpoint is still present, but its control readings have expired.
+    /// Keep its identity without presenting old values or inferring radio state.
+    pub fn waiting_for_controls(&self) -> Self {
+        Self {
+            family: self.family,
+            transport: self.transport,
+            capabilities: self.capabilities,
+            experimental_device: self.experimental_device,
+            xbox: self.xbox,
+            usb_cable: self.usb_cable,
+            device: self.device.clone(),
+            connection: self.connection.clone(),
+            status: "Headset controls are not responding. Retrying…".into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn connection_label(&self) -> &'static str {
+        match (self.transport, self.mix.is_some()) {
+            (Some(Connection::Bluetooth), _) => "Bluetooth",
+            (Some(Connection::WiredUsb), true) => "Wired",
+            (Some(Connection::WirelessDongle), true) => "Wireless",
+            (Some(_), false) => "No data",
+            (None, _) => "Offline",
+        }
+    }
+
     /// USB charging can bias the firmware's estimate; do not invent a correction.
     pub fn battery_label(&self) -> String {
         self.battery
@@ -177,6 +204,34 @@ pub fn mix_from_point(dx: f32, dy: f32) -> u8 {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn silent_controls_clear_readings_without_losing_the_present_endpoint() {
+        use super::*;
+        let live = SoundState {
+            family: Some(HeadsetFamily::Maxwell2Anc),
+            transport: Some(Connection::WirelessDongle),
+            device: Some("Maxwell 2 ANC".into()),
+            mix: Some((20, 80)),
+            battery: Some(82),
+            muted: Some(true),
+            anc: Some("On".into()),
+            ..Default::default()
+        };
+        let waiting = live.waiting_for_controls();
+        assert_eq!(waiting.device, live.device);
+        assert_eq!(waiting.transport, live.transport);
+        assert_eq!(
+            (waiting.mix, waiting.battery, waiting.muted),
+            (None, None, None)
+        );
+        assert!(waiting.anc.is_none());
+        assert_eq!(waiting.connection_label(), "No data");
+        assert_eq!(waiting.waiting_for_controls(), waiting);
+        assert!(!waiting.sound_changed(&live));
+        assert_eq!(SoundState::default().connection_label(), "Offline");
+        assert_eq!(live.connection_label(), "Wireless");
+    }
+
     use super::*;
     #[test]
     fn popup_mask_includes_only_changed_enabled_available_fields() {

@@ -50,6 +50,18 @@ Name: "{autodesktop}\Audeze Overlay"; Filename: "{app}\Audeze Overlay.exe"; Para
 Filename: "{app}\Audeze Overlay.exe"; Parameters: "--open"; Description: "Open Audeze Overlay"; Flags: nowait postinstall skipifsilent
 
 [Code]
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  StartupCommand: String;
+begin
+  // Preserve the user's existing opt-in while replacing stale portable/dev paths.
+  // Windows' StartupApproved setting (Task Manager) remains untouched.
+  if CurStep = ssPostInstall then
+    if RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'AudezeOverlay', StartupCommand) then
+      if StartupCommand <> '' then
+        RegWriteStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'AudezeOverlay', '"' + ExpandConstant('{app}\Audeze Overlay.exe') + '"');
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   StartupCommand: String;

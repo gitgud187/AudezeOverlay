@@ -165,21 +165,30 @@ fn main() {
         println!("{path}: ANC bounds and nonoverlap verified");
     }
     let config = Config::default();
-    for (name, transport, cable) in [
+    for (name, transport, cable, waiting) in [
         (
             "wireless-charging",
             audeze_overlay::model::Connection::WirelessDongle,
             true,
+            false,
         ),
         (
             "wired-power",
             audeze_overlay::model::Connection::WiredUsb,
             true,
+            false,
         ),
         (
             "bluetooth-status",
             audeze_overlay::model::Connection::Bluetooth,
             false,
+            false,
+        ),
+        (
+            "controls-unavailable",
+            audeze_overlay::model::Connection::WirelessDongle,
+            false,
+            true,
         ),
     ] {
         let status_config = Config {
@@ -193,6 +202,9 @@ fn main() {
             state.mix = None;
             state.battery = None;
             state.muted = None;
+        }
+        if waiting {
+            state = state.waiting_for_controls();
         }
         let view = View {
             config: &status_config,
