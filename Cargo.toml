@@ -1,6 +1,6 @@
 [package]
 name = "audeze-overlay"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 description = "A small native Windows sound-status overlay for Audeze Maxwell"
 license = "MIT"

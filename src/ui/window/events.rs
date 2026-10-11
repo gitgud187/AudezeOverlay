@@ -362,6 +362,10 @@ pub(super) unsafe fn dispatch(
             }
             Some(LRESULT(0))
         }
+        WM_TIMER if w.0 == TRAY_RETRY => {
+            ensure_tray(app);
+            Some(LRESULT(0))
+        }
         WM_TIMER if w.0 == REORDER => {
             let _ = KillTimer(Some(hwnd), REORDER);
             if matches!(app.drag, Drag::Card { resize: false, .. }) {
@@ -485,7 +489,8 @@ pub(super) unsafe fn dispatch(
             Some(LRESULT(0))
         }
         m if m == app.taskbar && m != 0 => {
-            tray(app, NIM_ADD);
+            app.tray_registration = Default::default();
+            ensure_tray(app);
             Some(LRESULT(0))
         }
         _ => None,

@@ -75,6 +75,16 @@ pub(super) unsafe fn smoke(app: &mut App) {
                 "audeze_tray_icon_created".into(),
                 !app.tray_icon.is_invalid(),
             ));
+            app.checks.push((
+                "tray_registered_with_shell".into(),
+                app.tray_registration.registered,
+            ));
+            tray(app, NIM_DELETE);
+            let _ = events::dispatch(app, app.hwnd, app.taskbar, WPARAM(0), LPARAM(0));
+            app.checks.push((
+                "tray_restored_after_taskbar_created".into(),
+                app.tray_registration.registered && !app.tray_registration.can_retry(),
+            ));
             let scale = GetDpiForWindow(app.hwnd).max(96) as f32 / 96.;
             let mut header = POINT {
                 x: (210. * scale) as i32,

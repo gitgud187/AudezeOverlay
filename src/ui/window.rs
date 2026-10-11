@@ -9,6 +9,7 @@ mod layout_editor;
 mod notice;
 mod painting;
 mod settings;
+mod tray_registration;
 use equalizer::*;
 mod smoke;
 use super::{
@@ -48,6 +49,7 @@ const DRAW: u32 = WM_APP + 6;
 const TICK: usize = 1;
 const HOLD: usize = 2;
 const REORDER: usize = 4;
+const TRAY_RETRY: usize = 5;
 const MIX_ANIMATION_MS: u64 = 70;
 #[derive(Clone)]
 struct Monitor {
@@ -120,6 +122,7 @@ struct App {
     notification_options: bool,
     popup_cards: Option<u8>,
     tray_icon: HICON,
+    tray_registration: tray_registration::TrayRegistration,
     low_latched: bool,
     wheel: i32,
     smoke: bool,
@@ -276,6 +279,7 @@ unsafe fn run() -> Result<()> {
         notification_options: false,
         popup_cards: None,
         tray_icon: HICON::default(),
+        tray_registration: Default::default(),
         low_latched: false,
         wheel: 0,
         smoke,
@@ -317,7 +321,7 @@ unsafe fn run() -> Result<()> {
         if !app.hotkey_registered {
             app.note = "The shortcut is already in use. Open Shortcuts to choose another.".into();
         }
-        tray(&app, NIM_ADD);
+        ensure_tray(&mut app);
         if !demo {
             app.controller = Some(device::start(hwnd.0 as isize, latest));
         }
@@ -569,7 +573,7 @@ unsafe fn toggle(app: &mut App) {
         show(app, true)
     }
 }
-unsafe fn tray(app: &App, op: NOTIFY_ICON_MESSAGE) {
+unsafe fn tray(app: &App, op: NOTIFY_ICON_MESSAGE) -> bool {
     let mut n = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
         hWnd: app.hwnd,
@@ -581,7 +585,19 @@ unsafe fn tray(app: &App, op: NOTIFY_ICON_MESSAGE) {
     };
     let tip = wide("Audeze Overlay · Direct USB");
     n.szTip[..tip.len()].copy_from_slice(&tip);
-    let _ = Shell_NotifyIconW(op, &n);
+    Shell_NotifyIconW(op, &n).as_bool()
+}
+unsafe fn ensure_tray(app: &mut App) {
+    let _ = KillTimer(Some(app.hwnd), TRAY_RETRY);
+    if !app.tray_registration.can_retry() {
+        return;
+    }
+    let added = tray(app, NIM_ADD);
+    if app.tray_registration.complete(added) {
+        // Explorer can be busy/unavailable at logon. This timer does no USB work
+        // and stops on success or after one minute; TaskbarCreated starts anew.
+        SetTimer(Some(app.hwnd), TRAY_RETRY, 2000, None);
+    }
 }
 unsafe fn menu(app: &mut App) {
     if !confirm_recording(app) {

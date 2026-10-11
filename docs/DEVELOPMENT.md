@@ -26,6 +26,12 @@ and write `diagnostics/smoke-v3.json`. The worker check reads live state without
 changing sound. The separate opt-in `verify-direct --controls-and-restore`
 diagnostic temporarily changes and restores sound settings.
 
+For installed-app startup tests, verify preferences and the Run entry from the
+normal Windows user session as well as the diagnostic shell. Isolated tooling
+can expose a redirected settings or registry view even when the printed path
+and user name match. Do not replace live user settings with a diagnostic copy;
+back up and change only the intended preference in the actual user context.
+
 `--demo` shows sample data. `--snapshot-preview --render-only` writes a PNG;
 add `--settings --section 0` (0–5) for settings pages or `--preview-layout stacked`
 for a tall layout. PNGs contain window pixels; real compositor blur is checked
