@@ -369,6 +369,32 @@ pub(in crate::ui) fn ensure_tray(app: &mut App) {
         app.shell.start_timer(Timer::TrayRetry, 2000);
     }
 }
+/// What the notification-area icon's menu can ask for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::ui) enum TrayCommand {
+    Open,
+    Settings,
+    ResetPosition,
+    Hide,
+    Quit,
+}
+
+pub(in crate::ui) fn tray_command(app: &mut App, command: TrayCommand) {
+    match command {
+        TrayCommand::Open => {
+            app.settings = None;
+            show(app, true)
+        }
+        TrayCommand::Settings => {
+            app.settings = Some(app.config.settings_page);
+            show(app, true)
+        }
+        TrayCommand::ResetPosition => reset(app),
+        TrayCommand::Hide => hide(app),
+        TrayCommand::Quit => app.shell.quit(),
+    }
+}
+
 pub(in crate::ui) fn menu(app: &mut App) {
     if !confirm_recording(app) {
         return;
@@ -383,20 +409,15 @@ pub(in crate::ui) fn menu(app: &mut App) {
     .into_iter()
     .map(|(id, label)| MenuEntry::item(id, label))
     .collect();
-    match app.shell.popup_menu(&entries, MenuOrigin::TrayIcon) {
-        Some(1) => {
-            app.settings = None;
-            show(app, true)
-        }
-        Some(2) => {
-            app.settings = Some(app.config.settings_page);
-            show(app, true)
-        }
-        Some(3) => reset(app),
-        Some(4) => hide(app),
-        Some(5) => app.shell.quit(),
-        _ => (),
-    }
+    let command = match app.shell.popup_menu(&entries, MenuOrigin::TrayIcon) {
+        Some(1) => TrayCommand::Open,
+        Some(2) => TrayCommand::Settings,
+        Some(3) => TrayCommand::ResetPosition,
+        Some(4) => TrayCommand::Hide,
+        Some(5) => TrayCommand::Quit,
+        _ => return,
+    };
+    tray_command(app, command);
 }
 pub(in crate::ui) fn reset(app: &mut App) {
     app.config.position = None;

@@ -1,18 +1,19 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 #[cfg(windows)]
 mod platform;
-// The application logic builds everywhere; only the Windows shell exists so far.
+// Until the Linux shell has the tray, shortcut and single-instance handling, some of
+// the shared logic is only reached from the Windows shell.
 #[cfg_attr(not(windows), allow(dead_code, unused_imports))]
 mod ui;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn main() {
     ui::run();
 }
 
-/// Interim: the overlay window exists only for Windows so far; see docs/LINUX.md.
-#[cfg(not(windows))]
+/// The overlay window exists for Windows and Linux (Wayland).
+#[cfg(not(any(windows, target_os = "linux")))]
 fn main() {
-    eprintln!("The overlay window is not available on this platform yet. See docs/LINUX.md.");
+    eprintln!("The overlay window is not available on this platform.");
     std::process::exit(2);
 }

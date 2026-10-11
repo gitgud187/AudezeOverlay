@@ -39,7 +39,7 @@ pub struct Monitor {
 }
 
 /// The timers the application logic can ask for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Timer {
     /// Drives animation frames; runs only while something moves.
     Animation,
