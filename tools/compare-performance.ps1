@@ -36,6 +36,13 @@ public static class BenchWindow {
 '@
 $NativePath = (Resolve-Path -LiteralPath $NativePath).Path
 $OverlayPath = (Resolve-Path -LiteralPath $OverlayPath).Path
+function Assert-OnlyMeasuredApp([int]$ExpectedId = 0) {
+    $competing = @(Get-Process | Where-Object {
+        $_.Path -in @($NativePath, $OverlayPath) -or $_.ProcessName -in @('Audeze', 'Audeze Overlay', 'audeze-overlay')
+    } | Where-Object { $_.Id -ne $ExpectedId })
+    if ($competing.Count) { throw 'Close other Audeze applications before measuring; competing controllers invalidate the comparison.' }
+}
+Assert-OnlyMeasuredApp
 $results = [System.Collections.Generic.List[object]]::new()
 foreach ($trial in 1..$Trials) {
     $apps = if ($trial % 2) { @('native','overlay') } else { @('overlay','native') }
@@ -58,6 +65,7 @@ foreach ($trial in 1..$Trials) {
                     & $inspector $process.Id | Set-Content (Join-Path (Split-Path $Output) "native-trial-$trial-ui.txt")
                 }
                 Start-Sleep -Seconds 3
+                Assert-OnlyMeasuredApp $process.Id
                 $process.Refresh()
                 if ($process.HasExited) { throw "$app exited before measurement." }
                 $cpuStart = $process.TotalProcessorTime.TotalMilliseconds
@@ -66,6 +74,7 @@ foreach ($trial in 1..$Trials) {
                 foreach ($second in 1..$Seconds) {
                     Start-Sleep -Seconds 1
                     $process.Refresh()
+                    if ($process.HasExited) { throw "$app exited during measurement." }
                     $samples.Add([pscustomobject]@{
                         workingSetMiB=$process.WorkingSet64/1MB
                         privateCommitMiB=$process.PrivateMemorySize64/1MB
@@ -74,8 +83,12 @@ foreach ($trial in 1..$Trials) {
                 }
                 $elapsed = $timer.Elapsed.TotalSeconds
                 $cpuMs = $process.TotalProcessorTime.TotalMilliseconds - $cpuStart
+                Assert-OnlyMeasuredApp $process.Id
                 $rect = [BenchWindow+Rect]::new()
                 [BenchWindow]::GetWindowRect($hwnd, [ref]$rect) | Out-Null
+                if ([BenchWindow]::IsWindowVisible($hwnd) -ne ($mode -eq 'visible')) {
+                    throw "$app visibility changed during measurement."
+                }
                 $result = [pscustomobject]@{
                     app=$app; trial=$trial; mode=$mode; seconds=$elapsed
                     cpuMs=$cpuMs; cpuOneCorePercent=$cpuMs/($elapsed*10)

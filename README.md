@@ -17,15 +17,15 @@ additional hardware is not yet verified and non-ANC custom EQ editing is disable
 
 ## One overlay, your layout
 
-Go slim and translucent, or keep the original stacked cards. Resize, rearrange,
-and hide controls to fit your screen. The fixed status row keeps the headset
-model, wireless connection, battery and microphone state in view.
+Arrange it your way. Resize, rearrange, and hide cards, then adjust transparency
+and blur to suit your screen. These are just two examples of how you can customize
+the same overlay. The fixed status row keeps the headset model,
+connection, battery and microphone state in view.
 
 <table>
-<tr><th>Vertical · subtle cards</th><th>Original · stacked cards</th></tr>
 <tr>
-<td valign="top"><img src="docs/screenshots/vertical.png" width="220" alt="Narrow vertical overlay with translucent cards and a Maxwell 2 ANC wireless status row"></td>
-<td valign="top"><img src="docs/screenshots/sound.png" width="570" alt="Original two-column layout with a large mix dial, stacked sound controls and the same status row"><p><strong>Vertical:</strong> 100% interface and text scale, 50% outer background, 10% card opacity, 50% backdrop blur.</p><p><strong>Original:</strong> default card layout, 70% outer background, 70% card opacity, 50% backdrop blur.</p><p>Both have the status row enabled and layout editing turned off. Text and icons stay solid as the panels become more transparent.</p></td>
+<td valign="top"><img src="docs/screenshots/vertical.png" width="220" alt="Customized overlay with translucent cards and a Maxwell 2 ANC wireless status row"></td>
+<td valign="top"><img src="docs/screenshots/sound.png" width="570" alt="Customized overlay with a large mix dial, sound controls beside it and a headset status row"><p>Your cards, your spacing, your appearance. Use a narrow column, spread controls across the screen, or keep only what you need.</p><p>Text and icons stay solid as the panels become more transparent. Both examples include the optional status row and have layout editing turned off.</p></td>
 </tr>
 </table>
 
@@ -35,23 +35,22 @@ depends on what is behind the overlay.*
 
 ## Built to stay small
 
-**About 82% less resident memory than Audeze App in our local comparison.**
-The overlay averaged **19.48 MiB** while visible, compared with **105.85 MiB** for
+**About 80% less resident memory than Audeze App in our latest local test.**
+The overlay averaged **21.51 MiB** while visible, compared with **105.95 MiB** for
 the official app. It runs independently, with no web runtime or permanent render
 loop.
 
 | Visible, connected application | Audeze Overlay | Audeze App |
 | --- | ---: | ---: |
-| Resident memory | **19.48 MiB** | 105.85 MiB |
-| Private committed memory | **7.17 MiB** | 151.49 MiB |
-| CPU, percentage of one logical core | **0.103%** | 1.314% |
+| Resident memory | **21.51 MiB** | 105.95 MiB |
+| Private committed memory | **7.09 MiB** | 150.53 MiB |
+| CPU, percentage of one logical core | **0.193%** | 0.965% |
 
-Measured on 10 October 2026 using Overlay 0.4.1 and Audeze App 1.2.48 on Windows 11
-with a Ryzen 7 9800X3D. Each figure averages two approximately 30-second samples.
-Memory savings were consistent; **CPU results varied between runs**, including a
-preliminary run with the opposite visible-CPU ordering. These figures do not
-establish an FPS improvement, zero game impact, or lower physical input latency.
-The official app also provides more features, including firmware management.
+Measured on 11 October 2026 using the final Overlay 0.4.1 build and Audeze App
+1.2.48 on Windows 11 with a Ryzen 7 9800X3D. Each figure averages two 60-second
+idle samples, with the apps run separately and the headset connected. Results
+depend on your layout and system; this test measures process resources, not FPS
+or physical input latency. The official app also includes firmware management.
 
 [Read the measurements, limitations and reproduction steps →](docs/PERFORMANCE.md)
 
