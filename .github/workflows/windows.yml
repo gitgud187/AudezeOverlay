@@ -25,6 +25,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Check release publishing
+        run: ./tools/test-publish-release.ps1
       - name: Set up Rust
         run: |
           rustup update stable --no-self-update
@@ -85,9 +87,15 @@ jobs:
     needs: build
     runs-on: windows-2022
     timeout-minutes: 10
+    concurrency:
+      group: release-publishing
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: windows-x64
@@ -100,101 +108,6 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
           COMMIT_SHA: ${{ github.sha }}
+          BUILD_NUMBER: ${{ github.run_number }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $development = $env:REF_TYPE -ne 'tag'
-          $tag = if ($development) { 'development' } else { $env:REF_NAME }
-          $title = if ($development) { 'Latest main build' } else { $tag }
-          $changes = ''
-          if ($development) {
-            $previousJson = gh api "repos/$env:GH_REPO/git/ref/tags/$tag" 2>$null
-            if ($LASTEXITCODE -eq 0) {
-              $previousSha = ($previousJson | ConvertFrom-Json).object.sha
-              if ($previousSha -ne $env:COMMIT_SHA) {
-                $comparisonJson = gh api "repos/$env:GH_REPO/compare/$previousSha...$env:COMMIT_SHA"
-                if ($LASTEXITCODE -ne 0) { throw 'Could not generate release changelog' }
-                $comparison = $comparisonJson | ConvertFrom-Json
-                $changes = (@($comparison.commits | ForEach-Object {
-                  $subject = ($_.commit.message -split "`n")[0]
-                  "- $subject ([commit]($($_.html_url)))"
-                }) -join "`n") + "`n`n[Full changelog]($($comparison.html_url))"
-              } else {
-                $changes = 'Rebuilt the current main commit; no additional code changes.'
-                $existingBody = gh release view $tag --repo $env:GH_REPO --json body --jq .body
-                if ($LASTEXITCODE -eq 0 -and ($existingBody -join "`n") -match "(?s)## What's new\s+(.*?)\s+### Build details") {
-                  $changes = $Matches[1]
-                }
-              }
-              gh api --method PATCH "repos/$env:GH_REPO/git/refs/tags/$tag" -f "sha=$env:COMMIT_SHA" -F force=true > $null
-            } else {
-              $changes = 'First downloadable main build. See the README for supported features and setup.'
-              gh api --method POST "repos/$env:GH_REPO/git/refs" -f "ref=refs/tags/$tag" -f "sha=$env:COMMIT_SHA" > $null
-            }
-            if ($LASTEXITCODE -ne 0) { throw 'Could not update development tag' }
-          }
-          if (!$development) {
-            $generatedJson = gh api --method POST "repos/$env:GH_REPO/releases/generate-notes" -f "tag_name=$tag" -f "target_commitish=$env:COMMIT_SHA"
-            if ($LASTEXITCODE -ne 0) { throw 'Could not generate version release changelog' }
-            $changes = ($generatedJson | ConvertFrom-Json).body
-          }
-          $download = "https://github.com/$env:GH_REPO/releases/download/$tag"
-          @(
-            '## Download for Windows 11 (64-bit)',
-            '',
-            "**[Install Audeze Overlay — recommended]($download/Audeze-Overlay-Setup.exe)**",
-            '',
-            'Run the installer, then open Audeze Overlay from the Start menu.',
-            '',
-            "[Portable ZIP — no installation]($download/Audeze-Overlay-Portable.zip): extract the ZIP and run Audeze Overlay.exe.",
-            '',
-            'Both downloads include the app and licenses. Source code archives are for developers. SHA256SUMS.txt is optional for verifying downloads.',
-            '',
-            "## What's new",
-            '',
-            $changes,
-            '',
-            '### Build details',
-            '',
-            "Built from commit $env:COMMIT_SHA. Packages are unsigned."
-          ) | Set-Content -LiteralPath release-notes.txt
-          $files = @(Get-ChildItem -LiteralPath release -File | ForEach-Object FullName)
-          gh release view $tag --repo $env:GH_REPO *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag @files --repo $env:GH_REPO --clobber
-            if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
-          } else {
-            $options = @('--verify-tag', '--title', $title, '--notes-file', 'release-notes.txt')
-            if (!$development -and $tag.Contains('-')) {
-              $options += @('--prerelease', '--latest=false')
-            } else {
-              $options += '--latest'
-            }
-            gh release create $tag @files --repo $env:GH_REPO @options
-            if ($LASTEXITCODE -ne 0) { throw 'Release creation failed' }
-          }
-          gh release edit $tag --repo $env:GH_REPO --notes-file release-notes.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Release changelog update failed' }
-          if ($development) {
-            # Promote existing prereleases too, so GitHub lists the main build as Latest.
-            gh release edit $tag --repo $env:GH_REPO --title $title --notes-file release-notes.txt --draft=false --prerelease=false --latest
-            if ($LASTEXITCODE -ne 0) { throw 'Release notes update failed' }
-            # Remove superseded build filenames only after the new files uploaded.
-            $assetJson = gh release view $tag --repo $env:GH_REPO --json assets
-            if ($LASTEXITCODE -ne 0) { throw 'Could not inspect uploaded assets' }
-            $currentNames = @($files | ForEach-Object { [IO.Path]::GetFileName($_) })
-            foreach ($asset in ($assetJson | ConvertFrom-Json).assets) {
-              if ($asset.name -notin $currentNames) {
-                gh release delete-asset $tag $asset.name --repo $env:GH_REPO --yes
-                if ($LASTEXITCODE -ne 0) { throw 'Could not remove an obsolete development asset' }
-              }
-            }
-            $latestJson = gh api "repos/$env:GH_REPO/releases/latest"
-            if ($LASTEXITCODE -ne 0) { throw 'Latest release is not publicly available' }
-            $latest = $latestJson | ConvertFrom-Json
-            if ($latest.tag_name -ne $tag -or $latest.draft -or $latest.prerelease) {
-              throw 'Main build was not published as the latest public release'
-            }
-            foreach ($name in $currentNames) {
-              if ($name -notin $latest.assets.name) { throw "Latest release is missing $name" }
-            }
-          }
+          ./tools/publish-release.ps1 -Repository $env:GH_REPO -CommitSha $env:COMMIT_SHA -RefType $env:REF_TYPE -RefName $env:REF_NAME -BuildNumber $env:BUILD_NUMBER

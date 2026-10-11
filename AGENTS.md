@@ -175,7 +175,9 @@ and `-Target x86_64-pc-windows-gnullvm`. Inspect archive contents and checksums.
   the conversation. A routine edit alone does not require an unsolicited push.
   If credentials fail, report the failure; do not print tokens or change accounts.
 - Branch pushes run checks and create artifacts. After integration, a successful
-  push to `main` publishes the rolling **Latest** release under `development`.
+  push to `main` publishes a new **Latest** release under `main-<12-character SHA>`.
+  Previous releases and assets remain in history; never move their tags or replace
+  their downloads. Release notes automatically list changes since the previous release.
   A main push is therefore a public release action. Integrate remote changes
   without overwriting others, and verify the CI run for the exact pushed SHA.
 - Numbered tags must be `v` plus the exact version in `Cargo.toml`. Update

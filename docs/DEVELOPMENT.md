@@ -75,10 +75,17 @@ for development builds. Layout preview images are a separate artifact.
 
 Successful pushes to `main` publish the portable ZIP and installer as the
 [latest release](https://github.com/temdah/AudezeOverlay/releases/latest).
-This rolling release uses the `development` tag and is updated on each successful
-main build. No manual tag is needed.
-Release notes include download instructions and a changelog since the previous
-main build. Numbered releases use GitHub's generated release notes.
+Each released main commit gets its own `main-<12-character commit>` tag, build
+number and publication date. Older releases and downloads remain in the release
+history; the newest build is marked **Latest**. No manual tag is needed.
+Release notes include download instructions and an automatic commit changelog
+since the previous published release. Numbered releases use GitHub's generated notes.
+
+`tools/publish-release.ps1` uploads the three downloads to a draft before making
+it public. A retry can repair a draft, but preserves already published downloads
+and notes. Superseded main builds do not replace Latest. The former `development`
+release is retained as an archived build. Run `tools/test-publish-release.ps1`
+to check publication behavior locally without credentials or network access.
 
 To additionally publish a numbered release, set the version in `Cargo.toml`, run `cargo check` to
 update `Cargo.lock`, commit, then push a matching version tag:
