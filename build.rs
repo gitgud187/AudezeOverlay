@@ -1,4 +1,9 @@
 fn main() {
+    // Cargo runs this script on the build machine, so the target is read from
+    // the environment rather than cfg!(windows).
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
     for path in ["assets/app.rc", "assets/audeze.ico"] {
         println!("cargo:rerun-if-changed={path}");
     }

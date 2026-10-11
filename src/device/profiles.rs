@@ -10,8 +10,8 @@ pub struct Profile {
     pub xbox: bool,
 }
 impl Profile {
-    pub fn supports_query(self, query: super::usb::Query) -> bool {
-        use super::usb::Query;
+    pub fn supports_query(self, query: super::protocol::Query) -> bool {
+        use super::protocol::Query;
         match query {
             Query::Anc => self.capabilities().anc,
             Query::EqBands | Query::EqWriteAck => self.capabilities().eq_edit,
@@ -92,7 +92,7 @@ mod tests {
             let p = Profile::from_usb(0x3329, pid).unwrap();
             assert!(!p.capabilities().anc && !p.capabilities().eq_edit);
             assert!(!p.supports_command(&super::super::command::Command::Anc("On".into())));
-            assert!(!p.supports_query(super::super::usb::Query::Anc));
+            assert!(!p.supports_query(super::super::protocol::Query::Anc));
             assert!(!p.supports_command(&super::super::command::Command::EqLoad(6)));
             assert!(p.supports_command(&super::super::command::Command::EqSelect(6)));
         }
