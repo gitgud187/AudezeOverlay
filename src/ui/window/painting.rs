@@ -80,7 +80,7 @@ pub(super) unsafe fn render_frame(app: &mut App, prepare_hidden: bool) {
         settings: app.settings,
         edit: app.edit,
         hover: app.hover,
-        note: &app.note,
+        note: app.note.text(),
         recording: app.recording,
         recorded_key: app.recorded_key,
         notification_options: app.notification_options,

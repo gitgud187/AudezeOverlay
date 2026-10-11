@@ -6,6 +6,13 @@ use windows::{
     Win32::{Devices::HumanInterfaceDevice::*, Foundation::*, Storage::FileSystem::*},
 };
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // The official backend requests 62 bytes. Compare it with our 64-byte
+    // request only in this explicitly invoked, bounded read-only diagnostic.
+    let report_size = if std::env::args().any(|s| s == "--official-report-size") {
+        62
+    } else {
+        64
+    };
     HidApi::disable_device_discovery();
     let mut api = HidApi::new()?;
     api.add_devices(0x3329, 0x4ba9)?;
@@ -45,6 +52,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?
         };
         for (name, body) in [
+            // Official 1.2.48 backend readPoweredOn(bool&), 0x140022670.
+            // This reads status; it does not switch headset power or pairing.
+            ("powered-on", vec![5, 0x5a, 2, 0, 0x80, 0x2c]),
             ("mix", vec![5, 0x5a, 4, 0, 0x83, 0x2c, 0x0b, 0]),
             ("noise", vec![5, 0x5a, 4, 0, 1, 9, 0x24, 0]),
             ("sidetone", vec![5, 0x5a, 4, 0, 1, 9, 0x2c, 0]),
@@ -59,14 +69,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             report[3..3 + body.len()].copy_from_slice(&body);
             let started = Instant::now();
             d.write(&report)?;
+            let mut reads = 0;
+            let mut replies = 0;
             while started.elapsed() < Duration::from_millis(150) {
                 std::thread::sleep(Duration::from_millis(10));
                 let mut buf = [0u8; 64];
                 buf[0] = 7;
-                if !unsafe { HidD_GetInputReport(handle, buf.as_mut_ptr().cast(), 64) } {
+                if !unsafe { HidD_GetInputReport(handle, buf.as_mut_ptr().cast(), report_size) } {
                     return Err(windows::core::Error::from_thread().into());
                 };
+                reads += 1;
                 if buf[1] > 0 {
+                    replies += 1;
+                }
+                if buf[1] > 0 || reads == 1 {
                     println!(
                         "{name} {}ms {:02x?}",
                         started.elapsed().as_millis(),
@@ -74,6 +90,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             }
+            println!(
+                "{name}: report size={report_size}, reads={reads}, populated replies={replies}"
+            );
         }
         unsafe {
             CloseHandle(handle)?;

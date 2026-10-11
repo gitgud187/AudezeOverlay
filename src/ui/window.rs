@@ -6,6 +6,7 @@ mod eq_profiles;
 mod equalizer;
 use eq_profiles::*;
 mod layout_editor;
+mod notice;
 mod painting;
 mod settings;
 use equalizer::*;
@@ -23,6 +24,7 @@ use audeze_overlay::{
     model::{mix_from_point, reconcile_mix, MixTarget, SoundState},
 };
 use layout_editor::*;
+use notice::Notice;
 use painting::*;
 use settings::*;
 use smoke::smoke;
@@ -91,7 +93,7 @@ struct App {
     edit: bool,
     interactive: bool,
     hover: Action,
-    note: String,
+    note: Notice,
     recording: bool,
     recorded_key: Option<(u32, u32)>,
     number_edit: Option<audeze_overlay::input::NumberDraft>,
@@ -247,7 +249,7 @@ unsafe fn run() -> Result<()> {
         edit: false,
         interactive: false,
         hover: Action::None,
-        note: startup_note,
+        note: startup_note.into(),
         recording: false,
         recorded_key: None,
         number_edit: None,
@@ -450,7 +452,7 @@ unsafe fn position(app: &App) {
 unsafe fn save(app: &mut App) {
     if !app.demo {
         if let Err(e) = app.config.save() {
-            app.note = format!("Could not save settings: {e}");
+            app.note = format!("Could not save settings: {e}").into();
         }
     }
 }
@@ -654,7 +656,7 @@ unsafe fn send(app: &mut App, c: Command) {
         receive_eq(app);
         app.note = "Preview — headset unchanged".into();
     } else if app.sound.mix.is_none() {
-        app.note = "Connect and turn on a supported headset.".into();
+        app.note = Notice::UntilConnected("Connect and turn on a supported headset.");
     } else if let Some(ctrl) = &app.controller {
         ctrl.clear_error();
         let mix = if let Command::Mix(value) = &c {
@@ -848,6 +850,9 @@ unsafe fn changed(app: &mut App) {
     }
     reconcile_mix(&mut app.pending_mix, &mut next);
     let connected_now = app.sound.mix.is_none() && next.mix.is_some();
+    if connected_now {
+        app.note.connected();
+    }
     let eq_changed = next.eq_index != app.sound.eq_index;
     let prev = &app.sound;
     let changed_cards = next.changed_cards(prev, app.config.notify);
@@ -859,7 +864,7 @@ unsafe fn changed(app: &mut App) {
     let alert = low && !app.low_latched;
     app.low_latched = low;
     if alert {
-        app.note = format!("Low headset battery: {}%", next.battery.unwrap());
+        app.note = format!("Low headset battery: {}%", next.battery.unwrap()).into();
     }
     if next.mix != prev.mix {
         app.mix_from = displayed_mix(app);

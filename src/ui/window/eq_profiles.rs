@@ -52,11 +52,11 @@ pub(super) unsafe fn remember_current_profile(app: &mut App, copy: bool) -> bool
     })();
     match result {
         Ok(name) => {
-            app.note = format!("Saved “{name}” in your profile library.");
+            app.note = format!("Saved “{name}” in your profile library.").into();
             true
         }
         Err(error) => {
-            app.note = error;
+            app.note = error.into();
             false
         }
     }
@@ -76,7 +76,8 @@ unsafe fn import_profile(app: &mut App) -> std::result::Result<(), String> {
     app.note = format!(
         "Imported “{}”. Choose it in Profiles to load into a custom slot.",
         app.config.eq_library[index].name
-    );
+    )
+    .into();
     Ok(())
 }
 unsafe fn export_profile(app: &mut App, profile: Profile) -> std::result::Result<(), String> {
@@ -210,7 +211,7 @@ pub(super) unsafe fn profile_menu(app: &mut App) {
         _ => Ok(()),
     };
     if let Err(error) = result {
-        app.note = error;
+        app.note = error.into();
     }
     request_draw(app);
 }

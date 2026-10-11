@@ -430,7 +430,7 @@ pub(super) unsafe fn dispatch(
         }
         CONTROL_MESSAGE => {
             if let Some(c) = &app.controller {
-                app.note = c.last_error().unwrap_or_default();
+                app.note = c.last_error().unwrap_or_default().into();
                 if !app.note.is_empty() {
                     app.eq_editor.failed();
                 }

@@ -31,7 +31,7 @@ pub(super) unsafe fn commit_number(app: &mut App) -> bool {
             true
         }
         Err(message) => {
-            app.note = message;
+            app.note = message.into();
             request_draw(app);
             false
         }
@@ -40,7 +40,7 @@ pub(super) unsafe fn commit_number(app: &mut App) -> bool {
 pub(super) unsafe fn factory_reset(app: &mut App) {
     if !app.demo {
         if let Err(message) = startup(false) {
-            app.note = message;
+            app.note = message.into();
             return;
         }
     }
@@ -257,7 +257,7 @@ pub(super) unsafe fn setting(app: &mut App, key: &str, n: i32) {
             } else {
                 match startup(enabled) {
                     Ok(()) => c.autostart = enabled,
-                    Err(e) => app.note = e,
+                    Err(e) => app.note = e.into(),
                 }
             }
         }

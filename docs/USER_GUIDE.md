@@ -190,3 +190,17 @@ Bluetooth-only status reflects Windows' cached connection status for recognized
 names; USB is still required for sound controls. It is experimental, does not
 cover LE Audio or phone connections, and refreshes when you open the overlay or
 Windows reports a device change.
+
+## Connection troubleshooting
+
+Audio and headset controls use different USB interfaces. Working audio does not
+necessarily mean the headset is answering battery, mix or EQ requests. **No data**
+means the recognized device is present but its controls are not replying; the
+overlay retries automatically. Connection reminders clear when live readings return.
+
+For repeated dongle disconnects on Windows, Audeze recommends unplugging the
+dongle, restarting **Phone Service** in Windows Services, then reconnecting the
+dongle. If a Windows tuning tool disabled this service, it must be enabled before
+it can start. See [Audeze's dongle troubleshooting guide](https://support.audeze.com/hc/en-us/articles/25560352180365-Maxwell-Dongle-Issues-Step-By-Step-Troubleshooting-PC-MAC-Xbox).
+The overlay does not change Windows services. This troubleshooting step is not
+a guarantee that every connection issue has the same cause.

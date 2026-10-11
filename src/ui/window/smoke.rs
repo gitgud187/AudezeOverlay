@@ -34,6 +34,34 @@ pub(super) unsafe fn smoke(app: &mut App) {
             app.alpha = 255;
             app.fade_in = None;
             render(app);
+            // Reconnect through the same status-message path as the worker,
+            // without a mouse event or an extra device command.
+            let live = app.sound.clone();
+            let previous_latest = app.latest.lock().unwrap().clone();
+            app.sound = SoundState::default();
+            app.demo = false;
+            send(app, Command::EqRefresh);
+            app.demo = true;
+            app.checks.push((
+                "offline_command_shows_connection_notice".into(),
+                !app.note.is_empty(),
+            ));
+            *app.latest.lock().unwrap() = live;
+            let _ = events::dispatch(app, app.hwnd, STATUS_MESSAGE, WPARAM(0), LPARAM(0));
+            app.checks.push((
+                "reconnect_clears_notice_and_queues_draw_without_click".into(),
+                app.note.is_empty() && app.sound.mix.is_some() && app.draw_queued,
+            ));
+            app.note = "Could not save settings: test failure".into();
+            app.sound.mix = None;
+            let _ = events::dispatch(app, app.hwnd, STATUS_MESSAGE, WPARAM(0), LPARAM(0));
+            app.checks.push((
+                "reconnect_preserves_unrelated_failure".into(),
+                app.note.text() == "Could not save settings: test failure",
+            ));
+            app.note.clear();
+            *app.latest.lock().unwrap() = previous_latest;
+            render(app);
             let region = CreateRectRgn(0, 0, 0, 0);
             let shape = GetWindowRgn(app.hwnd, region);
             app.checks.push((

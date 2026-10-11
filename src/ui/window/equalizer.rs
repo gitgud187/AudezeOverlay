@@ -95,7 +95,7 @@ pub(super) unsafe fn discard_eq(app: &mut App) {
 }
 unsafe fn finish_eq_preview(app: &mut App, discard: bool) {
     if app.sound.mix.is_none() {
-        app.note = "Reconnect the headset to save or restore this tuning.".into();
+        app.note = Notice::UntilConnected("Reconnect the headset to save or restore this tuning.");
         return;
     }
     let Some(draft) = app.eq_editor.draft_mut() else {
