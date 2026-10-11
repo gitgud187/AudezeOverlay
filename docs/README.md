@@ -7,6 +7,7 @@ Start with the [project overview and downloads](../README.md).
 | [User guide](USER_GUIDE.md) | Installation, controls, tray, layout, settings, shortcuts and live EQ |
 | [Performance measurements](PERFORMANCE.md) | Measured comparison, methodology, trial variability and reproduction |
 | [Device integration and compatibility](DEVICE_AND_COMPATIBILITY.md) | USB scheduling, latency limits, rendering, anti-cheat boundaries and visual assets |
+| [Device profiles and validation](DEVICE_PROTOCOL.md) | Experimental model identities, protocol evidence, wired connections and remaining hardware checks |
 | [Build, diagnostics and releases](DEVELOPMENT.md) | Local builds, diagnostic modes, packaging and GitHub releases |
 | [Architecture and Rust reading guide](ARCHITECTURE.md) | Module responsibilities, ownership and interaction flow |
 | [Contributing](../CONTRIBUTING.md) | Development checks and commit conventions |

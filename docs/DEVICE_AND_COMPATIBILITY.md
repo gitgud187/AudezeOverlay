@@ -2,6 +2,9 @@
 
 [Back to the project](../README.md)
 
+See [device profiles and validation](DEVICE_PROTOCOL.md) for experimental model
+coverage, wired/dongle routing, battery limitations and protocol provenance.
+
 ## Performance and compatibility
 
 

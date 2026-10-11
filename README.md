@@ -6,14 +6,32 @@ A lightweight, native Rust overlay for Audeze Maxwell headset controls. Turn the
 game/chat wheel and get a visual readout, or open the panel to adjust sound and EQ.
 It talks directly to the USB dongle, so **Audeze App can stay closed**.
 
+Development builds also include experimental wired USB and additional Maxwell
+profiles. See the [coverage and validation matrix](docs/DEVICE_PROTOCOL.md);
+additional hardware is not yet verified and non-ANC custom EQ editing is disabled.
+
 **[Download for Windows — installer](https://github.com/temdah/AudezeOverlay/releases/latest/download/Audeze-Overlay-Setup.exe)** ·
 [Portable ZIP](https://github.com/temdah/AudezeOverlay/releases/latest/download/Audeze-Overlay-Portable.zip) ·
 [What's new](https://github.com/temdah/AudezeOverlay/releases/latest) ·
 [Documentation](docs/README.md)
 
-![Sound overlay with circular game/chat mix, sidetone, ANC and device status](docs/screenshots/sound.png)
+## One overlay, your layout
 
-*Actual application views with sample data. Screenshots use the public font fallback.*
+Go slim and translucent, or keep the original stacked cards. Resize, rearrange,
+and hide controls to fit your screen. The fixed status row keeps the headset
+model, wireless connection, battery and microphone state in view.
+
+<table>
+<tr><th>Vertical · subtle cards</th><th>Original · stacked cards</th></tr>
+<tr>
+<td valign="top"><img src="docs/screenshots/vertical.png" width="220" alt="Narrow vertical overlay with translucent cards and a Maxwell 2 ANC wireless status row"></td>
+<td valign="top"><img src="docs/screenshots/sound.png" width="570" alt="Original two-column layout with a large mix dial, stacked sound controls and the same status row"><p><strong>Vertical:</strong> 100% interface and text scale, 50% outer background, 10% card opacity, 50% backdrop blur.</p><p><strong>Original:</strong> default card layout, 70% outer background, 70% card opacity, 50% backdrop blur.</p><p>Both have the status row enabled and layout editing turned off. Text and icons stay solid as the panels become more transparent.</p></td>
+</tr>
+</table>
+
+*Rendered by the application with sample readings and the public font fallback.
+These previews use a neutral backdrop to show panel opacity; live Windows blur
+depends on what is behind the overlay.*
 
 ## Built to stay small
 
@@ -43,7 +61,8 @@ The official app also provides more features, including firmware management.
   changes. Drag, scroll, or double-click to return to 50/50.
 - **Sound controls:** sidetone, ANC/Transparency, and microphone noise removal.
 - **Live EQ:** tune ten bands, switch presets, and pin your favorites. Save keeps
-  your curve; Discard restores the curve from before editing.
+  your curve; Discard restores the curve from before editing. Import profiles,
+  export portable files, and save a new copy in your local preset library.
 - **Useful status:** headset model, connection, battery, and microphone mute.
 - **Your layout:** move the overlay, resize and rearrange cards, or hide what you
   do not need.
@@ -75,9 +94,12 @@ shortcut that opens the panel. [Full settings and controls guide](docs/USER_GUID
 3. Press **Alt + Home** to show or hide the panel. Open Settings to record your
    preferred shortcut; the tray also provides Open, Reset position, and Quit.
 
-**Currently verified:** Maxwell 2 ANC with the supported USB dongle on Windows 11
-(VID `3329`, PID `4BA9`). Other Maxwell models, Bluetooth, and direct wired USB
-connections are not currently implemented. Use borderless/windowed games;
+**Hardware tested:** Maxwell 2 ANC PlayStation dongle (`3329:4BA9`) on Windows 11,
+plus wired status reads and mix recovery across cable changes (`3329:4BAA`).
+Other Maxwell identities and wired EQ editing remain experimental. Bluetooth is
+limited to Windows connection status, with no Bluetooth sound controls.
+See the [validation matrix](docs/DEVICE_PROTOCOL.md) before trying another model.
+Use borderless/windowed games;
 exclusive fullscreen can prevent ordinary desktop overlays from appearing.
 Packages are currently unsigned.
 

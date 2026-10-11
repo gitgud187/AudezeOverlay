@@ -15,6 +15,7 @@ official Audeze application. Dependencies point toward data and domain rules.
 | Motion | Time-based easing and directional selection transitions | `src/motion.rs` |
 | Preferences | Defaults, migrations, bounds, persistence | `src/config.rs` |
 | Device commands | Typed commands, bounded/coalesced queue, error interface | `src/device/command.rs` |
+| Device profiles | Explicit USB identities, model capabilities and control routing | `src/device/profiles.rs` |
 | USB protocol | Device access, packet framing, parsing | `src/device/usb.rs` |
 | USB scheduling | Worker thread, reads, acknowledgments, reconnects, tracing | `src/device/worker.rs` |
 | Raster drawing | Pixels, cached font glyphs, vector logo and primitives | `src/ui/draw.rs` |
