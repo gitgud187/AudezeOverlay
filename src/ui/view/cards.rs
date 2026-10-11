@@ -123,9 +123,11 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
                 40.,
             );
             if let Some(current) = v.sound.mix {
-                let numbers = v.animation.and_then(|f| f.numbers.value).unwrap_or(current);
-                let opacity = v.animation.map(|f| f.numbers.opacity).unwrap_or(1.);
-                mix_numbers(c, value_rect, value_size, numbers, opacity);
+                let numbers = v
+                    .animation
+                    .and_then(|f| f.numbers)
+                    .unwrap_or_else(|| super::super::number_roll::MixFrame::still(current));
+                mix_numbers(c, value_rect, value_size, numbers);
             } else {
                 c.fitted_text(&value, value_rect, value_size, FG, true, true);
             }
@@ -592,20 +594,19 @@ pub(super) fn status_icons(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, width:
     }
 }
 
-fn mix_numbers(c: &mut Canvas, r: Box2, size: f32, value: (u8, u8), opacity: f32) {
+fn mix_numbers(c: &mut Canvas, r: Box2, size: f32, frame: super::super::number_roll::MixFrame) {
     let mut size = size;
-    // Fit the widest valid readouts, so font size stays fixed during a fade.
+    // Complementary mix values need at most four visible digits (100 / 0).
+    // Always fit that width: reaching an endpoint cannot change the font size.
+    // Field widths ease through carries so centering does not jump either.
+    let cell = (size * 0.68).min(r.w / 5.2);
     while size > 10. {
         let px = (size * c.scale).round().max(1.);
-        let width = ["100 / 0", "0 / 100", "50 / 50"]
-            .iter()
-            .map(|text| {
-                text.chars()
-                    .map(|ch| c.painter.fonts[1].metrics(ch, px).advance_width / c.scale)
-                    .sum::<f32>()
-            })
+        let width = ('0'..='9')
+            .chain(Some('/'))
+            .map(|ch| c.painter.fonts[1].metrics(ch, px).advance_width / c.scale)
             .fold(0., f32::max);
-        if width + 1. <= r.w {
+        if width + 1. <= cell {
             break;
         }
         size -= 0.5;
@@ -617,12 +618,53 @@ fn mix_numbers(c: &mut Canvas, r: Box2, size: f32, value: (u8, u8), opacity: f32
         .map(|m| m.ascent)
         .unwrap_or(px);
     let ink_center = (ascent - metrics.height as f32 / 2. - metrics.ymin as f32) / c.scale;
-    let text_rect = Box2::new(r.x, r.y + r.h / 2. - ink_center, r.w, r.h);
-    c.fading_text(
-        &format!("{} / {}", value.0, value.1),
-        text_rect,
+    let y = r.y + r.h / 2. - ink_center;
+    let width = frame.values[0].width + frame.values[1].width;
+    let left = r.x + (r.w - cell * (width + 1.2)) / 2.;
+    let separator = left + cell * frame.values[0].width;
+    c.text_clipped(
+        "/",
+        Box2::new(separator, y, cell * 1.2, r.h),
         size,
+        FG,
+        true,
+        true,
         r,
-        opacity,
     );
+    for (side, number) in frame.values.into_iter().enumerate() {
+        let field = if side == 0 {
+            left
+        } else {
+            separator + cell * 1.2
+        };
+        let start = field + (number.width - 3.) * cell;
+        for (column, digit) in number
+            .digits
+            .into_iter()
+            .enumerate()
+            .skip(3 - number.columns)
+        {
+            // Keep the new leading mark inside its reserved field while the
+            // neighboring marks ease aside to make room during a carry.
+            let x = (start + cell * column as f32).max(field);
+            let digit_width = if column < 2 {
+                ((start + cell * (column + 1) as f32).max(field) - x).min(cell)
+            } else {
+                cell
+            };
+            // Two neighboring marks on a strip suffice at any fractional
+            // position. Unchanged cells are drawn once, without any motion.
+            for (value, offset) in [
+                (digit.lower, -digit.fraction),
+                (digit.upper, 1. - digit.fraction),
+            ] {
+                if offset == 1.
+                    || (value == 0 && column == 3 - number.columns && number.columns > 1)
+                {
+                    continue;
+                }
+                c.drum_digit(value, Box2::new(x, r.y, digit_width, r.h), size, offset);
+            }
+        }
+    }
 }

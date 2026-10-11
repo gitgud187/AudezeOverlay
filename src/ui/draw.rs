@@ -30,6 +30,25 @@ pub struct Canvas<'a> {
     pub scale: f32,
     pub painter: &'a mut Painter,
 }
+
+/// Bilinear glyph coverage retains fractional movement instead of rounding each
+/// animation frame to a whole pixel. Outside the cached glyph is transparent.
+fn glyph_coverage(bitmap: &[u8], width: usize, height: usize, x: f32, y: f32) -> f32 {
+    let ix = x.floor() as i32;
+    let iy = y.floor() as i32;
+    let fx = x - x.floor();
+    let fy = y - y.floor();
+    let sample = |x: i32, y: i32| {
+        if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+            0.
+        } else {
+            bitmap[y as usize * width + x as usize] as f32
+        }
+    };
+    let a = sample(ix, iy) * (1. - fx) + sample(ix + 1, iy) * fx;
+    let b = sample(ix, iy + 1) * (1. - fx) + sample(ix + 1, iy + 1) * fx;
+    a * (1. - fy) + b * fy
+}
 pub fn asset(name: &str) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?.parent()?.to_path_buf();
     [
@@ -225,9 +244,79 @@ impl<'a> Canvas<'a> {
             None,
         );
     }
-    pub fn fading_text(&mut self, text: &str, r: Box2, size: f32, clip: Box2, opacity: f32) {
-        self.text_region(text, r, size, 0xf3f3f3, true, true, opacity, Some(clip));
+    /// Project one cached glyph around a vertical digit drum. Only this small
+    /// glyph is resampled; no scratch surface or extra animation timer is needed.
+    pub fn drum_digit(&mut self, digit: u8, bounds: Box2, size: f32, offset: f32) {
+        if offset.abs() >= 1. || bounds.w <= 0. {
+            return;
+        }
+        let angle = offset * std::f32::consts::FRAC_PI_2;
+        let squash = angle.cos();
+        if squash < 0.01 {
+            return;
+        }
+        let px = (size * self.scale).round().max(1.) as u16;
+        let zero = self.painter.fonts[1].metrics('0', px as f32);
+        let half_ink = zero.height as f32 * 0.5;
+        let half_window = (bounds.h * self.scale * 0.5 - 1.).max(half_ink);
+        // This radius fits the full rotating glyph, even between edge-on and
+        // face-on. Its edge compresses into the drum instead of hitting a mask.
+        let radius = (half_window * half_window - half_ink * half_ink)
+            .sqrt()
+            .min(half_ink * 1.4);
+        let center_y = (bounds.y + bounds.h * 0.5) * self.scale + angle.sin() * radius;
+        let ch = char::from(b'0' + digit);
+        let (metrics, bitmap) = self
+            .painter
+            .glyphs
+            .entry((ch, px, true))
+            .or_insert_with(|| self.painter.fonts[1].rasterize(ch, px as f32));
+        // The leading mark unfolds into the space created by a carry; it must
+        // never overlap the adjacent drum while that space is still opening.
+        let squeeze = ((bounds.w * self.scale) / (metrics.advance_width + 1.)).min(1.);
+        if squeeze < 0.01 {
+            return;
+        }
+        let left = (bounds.x + bounds.w * 0.5) * self.scale
+            + (metrics.xmin as f32 - metrics.advance_width * 0.5) * squeeze;
+        let top = center_y
+            + (half_ink + zero.ymin as f32 - metrics.height as f32 - metrics.ymin as f32) * squash;
+        let width = self.pix.width() as i32;
+        let height = self.pix.height() as i32;
+        // A short softness at the horizon avoids a one-pixel line popping off.
+        let visibility = (squash * 3.).min(1.);
+        let pixels = self.pix.data_mut();
+        for y in (top.floor() as i32).max(0)
+            ..((top + metrics.height as f32 * squash).ceil() as i32).min(height)
+        {
+            let source_y = (y as f32 + 0.5 - top) / squash - 0.5;
+            for x in (left.floor() as i32).max(0)
+                ..((left + metrics.width as f32 * squeeze).ceil() as i32).min(width)
+            {
+                if !bounds.contains(x as f32 / self.scale, y as f32 / self.scale) {
+                    continue;
+                }
+                let a = (glyph_coverage(
+                    bitmap,
+                    metrics.width,
+                    metrics.height,
+                    (x as f32 + 0.5 - left) / squeeze - 0.5,
+                    source_y,
+                ) * visibility)
+                    .round() as u32;
+                if a == 0 {
+                    continue;
+                }
+                let at = ((y * width + x) * 4) as usize;
+                for channel in &mut pixels[at..at + 3] {
+                    *channel = ((243 * a + *channel as u32 * (255 - a) + 127) / 255) as u8;
+                }
+                pixels[at + 3] =
+                    (a + (pixels[at + 3] as u32 * (255 - a) + 127) / 255).min(255) as u8;
+            }
+        }
     }
+
     pub fn line(&mut self, pts: &[(f32, f32)], color: u32, alpha: f32, width: f32) {
         if pts.len() < 2 {
             return;
@@ -486,6 +575,42 @@ impl<'a> Canvas<'a> {
             .post_translate(x * self.scale, y * self.scale);
         for path in &self.painter.logo {
             self.pix.fill_path(path, &p, FillRule::Winding, t, None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fractional_glyph_sampling_moves_coverage_without_whole_pixel_jumps() {
+        let glyph = [0, 255, 0];
+        let a = glyph_coverage(&glyph, 1, 3, 0., 1.25);
+        let b = glyph_coverage(&glyph, 1, 3, 0., 1.5);
+        let c = glyph_coverage(&glyph, 1, 3, 0., 1.75);
+        assert!(a > b && b > c && c > 0.);
+        assert_eq!(a + c, 255.);
+        assert_eq!(glyph_coverage(&glyph, 1, 3, -2., 1.), 0.);
+    }
+
+    #[test]
+    fn rotating_digits_fit_inside_the_drum_without_touching_a_mask_edge() {
+        let mut painter = Painter::new();
+        for digit in 0..=9 {
+            for offset in [-0.95, -0.5, -0.1, 0., 0.1, 0.5, 0.95] {
+                let mut c = Canvas::new(&mut painter, 64, 64, 1.);
+                c.drum_digit(digit, Box2::new(10., 10., 44., 40.), 30., offset);
+                for y in [10, 49] {
+                    for x in 10..54 {
+                        assert_eq!(
+                            c.pix.pixel(x, y).unwrap().alpha(),
+                            0,
+                            "digit {digit}, offset {offset} hits the rectangular edge"
+                        );
+                    }
+                }
+            }
         }
     }
 }

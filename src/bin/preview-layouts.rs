@@ -4,8 +4,8 @@
 mod dashboard;
 #[path = "../ui/draw.rs"]
 mod draw;
-#[path = "../ui/number_fade.rs"]
-mod number_fade;
+#[path = "../ui/number_roll.rs"]
+mod number_roll;
 #[path = "../ui/presentation.rs"]
 mod presentation;
 
@@ -370,48 +370,56 @@ fn main() {
             .save_png(format!("diagnostics/layout-{name}.png"))
             .unwrap();
     }
-    let mut motion = presentation::Presentation::default();
     let now = std::time::Instant::now();
-    let mut before = sound.clone();
-    before.anc = Some("On".into());
-    let boxes = dashboard::card_boxes(&config, config.width as f32, config.height as f32);
-    motion.frame(boxes, &before, false, true, now);
-    let mut after = before.clone();
-    after.mix = Some((20, 80));
-    after.anc = Some("Transparency".into());
-    for millis in [0, 45, 90, 160, 300] {
-        let frame = motion.frame(
-            boxes,
-            &after,
-            true,
-            true,
-            now + std::time::Duration::from_millis(millis),
-        );
-        let view = View {
-            eq_editor: None,
-            config: &config,
-            sound: &after,
-            settings: None,
-            edit: false,
-            hover: Action::Mix,
-            note: "",
-            recording: false,
-            recorded_key: None,
-            notification_options: false,
-            popup_cards: None,
-            number_edit: None,
-            mix: 80.,
-            demo: false,
-            monitor_label: "Automatic",
-            drag_preview: None,
-            animation: Some(&frame),
-        };
-        dashboard::render(&mut painter, config.width, config.height, 1., &view)
-            .pix
-            .save_png(format!("diagnostics/layout-motion-{millis}.png"))
-            .unwrap();
-        if millis == 300 {
-            assert!(!frame.active, "Animations must stop when idle");
+    for (name, from, to) in [
+        ("motion", (50, 50), (20, 80)),
+        ("roll-step", (20, 80), (25, 75)),
+        ("roll-carry", (95, 5), (100, 0)),
+        ("roll-down", (30, 70), (25, 75)),
+    ] {
+        let mut motion = presentation::Presentation::default();
+        let mut before = sound.clone();
+        before.mix = Some(from);
+        before.anc = Some("On".into());
+        let boxes = dashboard::card_boxes(&config, config.width as f32, config.height as f32);
+        motion.frame(boxes, &before, false, true, now);
+        let mut after = before.clone();
+        after.mix = Some(to);
+        after.anc = Some("Transparency".into());
+        for millis in [0, 16, 32, 45, 64, 90, 160, 300] {
+            let frame = motion.frame(
+                boxes,
+                &after,
+                true,
+                true,
+                now + std::time::Duration::from_millis(millis),
+            );
+            let view = View {
+                eq_editor: None,
+                config: &config,
+                sound: &after,
+                settings: None,
+                edit: false,
+                hover: Action::Mix,
+                note: "",
+                recording: false,
+                recorded_key: None,
+                notification_options: false,
+                popup_cards: None,
+                number_edit: None,
+                mix: to.1 as f32,
+                demo: false,
+                monitor_label: "Automatic",
+                drag_preview: None,
+                animation: Some(&frame),
+            };
+            dashboard::render(&mut painter, config.width, config.height, 1., &view)
+                .pix
+                .save_png(format!("diagnostics/layout-{name}-{millis}.png"))
+                .unwrap();
+            if millis == 300 {
+                assert!(!frame.active, "Animations must stop when idle");
+            }
         }
     }
 }

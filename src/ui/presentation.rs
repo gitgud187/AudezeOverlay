@@ -1,7 +1,7 @@
 //! Presentation state bridges pure transitions to the rasterizer. No device I/O.
 use super::{
     draw::Box2,
-    number_fade::{NumberFade, NumberFrame},
+    number_roll::{MixFrame, MixRoll},
 };
 use audeze_overlay::{
     model::SoundState,
@@ -12,7 +12,7 @@ use std::time::Instant;
 pub struct AnimationFrame {
     pub cards: [Box2; 6],
     pub grip: f32,
-    pub numbers: NumberFrame,
+    pub numbers: Option<MixFrame>,
     pub anc: SelectionFrame,
     pub noise: SelectionFrame,
     pub active: bool,
@@ -23,7 +23,7 @@ pub struct Presentation {
     cards_to: Option<[Box2; 6]>,
     cards_started: Instant,
     grip: Tween,
-    numbers: NumberFade,
+    numbers: MixRoll,
     anc: SelectionMotion,
     noise: SelectionMotion,
 }
@@ -35,7 +35,7 @@ impl Default for Presentation {
             cards_to: None,
             cards_started: now,
             grip: Tween::new(0., now),
-            numbers: NumberFade::default(),
+            numbers: MixRoll::default(),
             anc: SelectionMotion::new(now),
             noise: SelectionMotion::new(now),
         }
@@ -100,7 +100,7 @@ impl Presentation {
         let active = animate
             && ((self.cards_from != cards && progress(self.cards_started, now, 130) < 1.)
                 || self.grip.active(now)
-                || numbers.active
+                || numbers.is_some_and(|frame| frame.active)
                 || self.anc.active(now)
                 || self.noise.active(now));
         AnimationFrame {
