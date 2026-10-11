@@ -103,7 +103,10 @@ if (!$existing) {
 }
 Invoke-GitHub release upload $tag @files --repo $Repository --clobber
 Invoke-GitHub release edit $tag --repo $Repository --title $title --notes-file $notesPath
-$draft = Invoke-GitHub api "repos/$Repository/releases/tags/$tag" | ConvertFrom-Json
+# GitHub's by-tag REST endpoint cannot find an unpublished tag. Resolve the draft
+# through the CLI, which supports draft lookup, then inspect it by release ID.
+$draftId = Invoke-GitHub release view $tag --repo $Repository --json databaseId --jq .databaseId
+$draft = Invoke-GitHub api "repos/$Repository/releases/$draftId" | ConvertFrom-Json
 Assert-ReleaseAssets $draft
 if ($mainBuild -and !(Test-CurrentMain)) {
     Write-Host 'A newer main commit arrived during upload; leaving this build as a draft.'

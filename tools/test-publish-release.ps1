@@ -17,7 +17,7 @@ function Reset-Fixture {
         head = $global:AudezeReleaseTestsha; calls = [Collections.Generic.List[object]]::new()
         failUpload = $false; failList = $false; supersedeAfterUpload = $false
         releases = @(@{
-            tag_name = 'development'; name = 'Latest main build'; draft = $false
+            id = 1; tag_name = 'development'; name = 'Latest main build'; draft = $false
             prerelease = $false; published_at = '2026-01-01T00:00:00Z'
             body = "Built from commit $global:AudezeReleaseTestbase."; assets = @(@{ name = 'old.zip'; size = 10 })
         })
@@ -55,7 +55,12 @@ function gh {
             }
             '*/releases/tags/*' {
                 $target = $endpoint.Split('/')[-1]
-                return ($global:AudezeReleaseTeststate.releases | Where-Object tag_name -eq $target | ConvertTo-Json -Depth 10)
+                $release = $global:AudezeReleaseTeststate.releases | Where-Object tag_name -eq $target
+                if ($release.draft) { $global:LASTEXITCODE = 1; return }
+                return ($release | ConvertTo-Json -Depth 10)
+            }
+            '*/releases/2' {
+                return ($global:AudezeReleaseTeststate.releases | Where-Object id -eq 2 | ConvertTo-Json -Depth 10)
             }
             default { throw "Unexpected API request: $endpoint" }
         }
@@ -64,12 +69,16 @@ function gh {
     $target = $a[2]
     $release = $global:AudezeReleaseTeststate.releases | Where-Object tag_name -eq $target | Select-Object -First 1
     switch ($a[1]) {
+        'view' {
+            Assert-That ('databaseId' -in $a) 'Unexpected release lookup'
+            return $release.id
+        }
         'create' {
             Assert-That (!$release) 'Duplicate release creation'
             Assert-That ('--draft' -in $a) 'New release must start as a draft'
             Assert-That ($a[$a.IndexOf('--target') + 1] -eq $global:AudezeReleaseTestsha) 'Wrong target commit'
             $global:AudezeReleaseTeststate.releases += @{
-                tag_name = $target; name = ''; draft = $true; prerelease = $false
+                id = 2; tag_name = $target; name = ''; draft = $true; prerelease = $false
                 published_at = $null; body = ''; assets = @()
             }
         }
