@@ -108,6 +108,15 @@ pub fn main() {
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
+    if let Some(unknown) = args
+        .iter()
+        .skip(1)
+        .find(|a| !matches!(a.as_str(), "--demo" | "--toggle"))
+    {
+        return Err(format!(
+            "unknown option {unknown} (options: --demo, --toggle)"
+        ));
+    }
     let demo = args.iter().any(|a| a == "--demo");
     // Launching again asks the running instance to show itself; --toggle flips
     // it. Demo runs are independent so they never disturb a real one.
@@ -298,6 +307,9 @@ fn run() -> Result<(), String> {
     if !demo && !state.app.hotkey_registered {
         state.app.note = "No global shortcut: bind `audeze-overlay --toggle` instead.".into();
     }
+    // Unlike Windows, which starts in the tray after the first run, the panel is
+    // always shown at start: a portal shortcut can be granted late or not at all,
+    // and the panel must stay reachable until then.
     show(&mut state.app, true);
 
     let signal = event_loop.get_signal();
@@ -577,8 +589,12 @@ impl SeatHandler for State {
             if let Some(pointer) = self.pointer.take() {
                 pointer.release();
             }
-            self.relative_pointer = None;
-            self.cursor_device = None;
+            if let Some(relative) = self.relative_pointer.take() {
+                relative.destroy();
+            }
+            if let Some(device) = self.cursor_device.take() {
+                device.destroy();
+            }
         }
     }
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}

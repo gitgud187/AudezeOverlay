@@ -324,7 +324,6 @@ fn layout(painter: &mut Painter, content: &Content) -> Layout {
                     enabled: true,
                     answer: Answer::Choice(*choice),
                 });
-                x -= 0.;
             }
             hits.reverse();
             Layout {

@@ -224,8 +224,9 @@ pub trait Shell: Any {
     fn choose_file(&mut self, save: bool) -> Result<Option<PathBuf>, String>;
 
     // ---- Global shortcut. Only one binding is active at a time. `modifiers` and
-    // `key` are stored in the preferences: bit 1 Alt, 2 Ctrl, 4 Shift, and a
-    // Windows virtual-key code.
+    // `key` are stored in the preferences: bit 1 Alt, 2 Ctrl, 4 Shift, and a key
+    // code in the preference format (Windows virtual-key numbering); a shell on
+    // another platform translates it to its own key names.
     fn register_hotkey(&mut self, modifiers: u32, key: u32) -> bool;
     fn unregister_hotkey(&mut self);
     /// Switches to a new binding without a gap: the previous one keeps working

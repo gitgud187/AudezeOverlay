@@ -63,9 +63,10 @@ fi
 install -Dm755 "$binary" "$bin_dir/audeze-overlay"
 # The entry names the installed program by its full path so it works even when
 # ~/.local/bin is not on the desktop's PATH.
-sed "s|^Exec=audeze-overlay|Exec=$bin_dir/audeze-overlay|" "$here/$id.desktop" > "$here/.$id.desktop.tmp"
-install -Dm644 "$here/.$id.desktop.tmp" "$share/applications/$id.desktop"
-rm -f "$here/.$id.desktop.tmp"
+# (Written next to the destination: the source tree may be read-only.)
+mkdir -p "$share/applications"
+sed "s|^Exec=audeze-overlay|Exec=$bin_dir/audeze-overlay|" "$here/$id.desktop" > "$share/applications/$id.desktop"
+chmod 644 "$share/applications/$id.desktop"
 for size in 48x48 128x128 256x256; do
     install -Dm644 "$here/icons/$size/apps/$id.png" "$share/icons/hicolor/$size/apps/$id.png"
 done
