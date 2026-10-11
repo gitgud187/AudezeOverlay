@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$CommitSha,
     [Parameter(Mandatory)][ValidateSet('branch', 'tag')][string]$RefType,
     [Parameter(Mandatory)][string]$RefName,
-    [Parameter(Mandatory)][string]$BuildNumber,
+    [string]$ReleaseNotesPath,
     [string]$ArtifactDirectory = 'release'
 )
 
@@ -44,9 +44,9 @@ if ($mainBuild -and !(Test-CurrentMain)) {
 $versionMatch = Select-String -LiteralPath "$PSScriptRoot/../Cargo.toml" -Pattern '^version = "([^"]+)"' | Select-Object -First 1
 $version = $versionMatch.Matches[0].Groups[1].Value
 if (!$mainBuild -and $RefName -ne "v$version") { throw 'Release tag must match Cargo.toml' }
-$tag = if ($mainBuild) { "main-$($CommitSha.Substring(0, 12))" } else { $RefName }
-$title = if ($mainBuild) { "Audeze Overlay $version - build $BuildNumber" } else { "Audeze Overlay $version" }
-$prerelease = !$mainBuild -and $tag.Contains('-')
+$tag = "v$version"
+$title = "Audeze Overlay $version"
+$prerelease = $tag.Contains('-')
 $assetNames = @('Audeze-Overlay-Setup.exe', 'Audeze-Overlay-Portable.zip', 'SHA256SUMS.txt')
 $files = @($assetNames | ForEach-Object { (Get-Item -LiteralPath (Join-Path $ArtifactDirectory $_)).FullName })
 
@@ -55,44 +55,44 @@ $pages = Invoke-GitHub api --paginate --slurp "repos/$Repository/releases?per_pa
 $releases = @($pages | ForEach-Object { $_ })
 $existing = $releases | Where-Object tag_name -eq $tag | Select-Object -First 1
 if ($existing -and !$existing.draft) {
-    Assert-ReleaseAssets $existing
     $commit = Invoke-GitHub api "repos/$Repository/commits/$tag" | ConvertFrom-Json
-    if ($commit.sha -ne $CommitSha) { throw 'Published tag points to a different commit' }
-    Write-Host "Release $tag is already published; preserving its downloads and changelog."
+    if ($commit.sha -ne $CommitSha) {
+        if (!$mainBuild) { throw 'Published tag points to a different commit' }
+        Write-Host "Version $version is already released. Increment Cargo.toml and add release notes for the next release."
+        return
+    }
+    Assert-ReleaseAssets $existing
+    Write-Host "Release $tag is already published; preserving its downloads and release notes."
     return
 }
 
-$previous = $releases | Where-Object { !$_.draft -and !$_.prerelease -and $_.tag_name -ne $tag } |
-    Sort-Object published_at -Descending | Select-Object -First 1
-if ($mainBuild -and $previous) {
-    $baseCommit = Invoke-GitHub api "repos/$Repository/commits/$($previous.tag_name)" | ConvertFrom-Json
-    if ($baseCommit.sha -eq $CommitSha) {
-        $changes = 'Published this build as a separate release; application code is unchanged.'
-    } else {
-        $comparisons = Invoke-GitHub api --paginate --slurp "repos/$Repository/compare/$($baseCommit.sha)...${CommitSha}?per_page=100" | ConvertFrom-Json
-        if ($comparisons[0].status -ne 'ahead') { throw 'Previous release is not an ancestor of this main build' }
-        $changes = (@($comparisons | ForEach-Object commits | ForEach-Object {
-            $subject = ($_.commit.message -split "`n")[0]
-            "- $subject ([commit]($($_.html_url)))"
-        }) -join "`n") + "`n`n[Full changelog]($($comparisons[0].html_url))"
-    }
-} elseif ($mainBuild) {
-    $changes = 'First downloadable main build. See the README for features and setup.'
-} else {
-    $generated = Invoke-GitHub api --method POST "repos/$Repository/releases/generate-notes" -f "tag_name=$tag" -f "target_commitish=$CommitSha" | ConvertFrom-Json
-    $changes = $generated.body
+# A manually created tag must identify the tested commit too. Draft targets can
+# be updated, but changing target_commitish does not move an existing Git tag.
+$tagRefs = Invoke-GitHub api "repos/$Repository/git/matching-refs/tags/$tag" | ConvertFrom-Json
+if (@($tagRefs | Where-Object ref -eq "refs/tags/$tag").Count) {
+    $tagCommit = Invoke-GitHub api "repos/$Repository/commits/$tag" | ConvertFrom-Json
+    if ($tagCommit.sha -ne $CommitSha) { throw 'Release tag already points to a different commit' }
 }
+
+# Release highlights are written for users and reviewed with the version change.
+# Never fall back to commit subjects or generated technical changelogs.
+if (!$ReleaseNotesPath) { $ReleaseNotesPath = "$PSScriptRoot/../docs/releases/$version.md" }
+$changes = [string](Get-Content -Raw -LiteralPath $ReleaseNotesPath)
+$changes = $changes.Trim()
+if ([string]::IsNullOrWhiteSpace($changes)) { throw "Release notes for $version must not be empty" }
 
 $download = "https://github.com/$Repository/releases/download/$tag"
 $notesPath = Join-Path $ArtifactDirectory 'release-notes.txt'
 @(
+    "## What's new", '', $changes, '',
     '## Download for Windows 11 (64-bit)', '',
     "**[Install Audeze Overlay — recommended]($download/Audeze-Overlay-Setup.exe)**", '',
     'Run the installer, then open Audeze Overlay from the Start menu.', '',
-    "[Portable ZIP — no installation]($download/Audeze-Overlay-Portable.zip): extract the ZIP and run Audeze Overlay.exe.", '',
-    'Both downloads include the app and licenses. Source code archives are for developers. SHA256SUMS.txt is optional for verifying downloads.', '',
-    "## What's new", '', $changes, '', '### Build details', '',
-    "Built from commit $CommitSha. Packages are unsigned."
+    "[Portable ZIP — no installation]($download/Audeze-Overlay-Portable.zip): extract and run Audeze Overlay.exe.", '',
+    '<details>', '<summary>Package details</summary>', '',
+    'Both downloads include licenses. Packages are unsigned. Source code archives are for developers.', '',
+    "Built from commit $CommitSha.", '',
+    '</details>'
 ) | Set-Content -LiteralPath $notesPath -Encoding utf8
 
 # Keep partial uploads private. A retry may repair a draft but never replace a public release.
@@ -102,7 +102,7 @@ if (!$existing) {
     Invoke-GitHub release create $tag --repo $Repository @options
 }
 Invoke-GitHub release upload $tag @files --repo $Repository --clobber
-Invoke-GitHub release edit $tag --repo $Repository --title $title --notes-file $notesPath
+Invoke-GitHub release edit $tag --repo $Repository --title $title --notes-file $notesPath --target $CommitSha
 # GitHub's by-tag REST endpoint cannot find an unpublished tag. Resolve the draft
 # through the CLI, which supports draft lookup, then inspect it by release ID.
 $draftId = Invoke-GitHub release view $tag --repo $Repository --json databaseId --jq .databaseId
@@ -118,6 +118,8 @@ Invoke-GitHub release edit $tag --repo $Repository @publishOptions
 $published = Invoke-GitHub api "repos/$Repository/releases/tags/$tag" | ConvertFrom-Json
 Assert-ReleaseAssets $published
 if ($published.draft -or $published.prerelease -ne $prerelease) { throw 'Release publication failed' }
+$publishedCommit = Invoke-GitHub api "repos/$Repository/commits/$tag" | ConvertFrom-Json
+if ($publishedCommit.sha -ne $CommitSha) { throw 'Published release does not point to the tested commit' }
 if (!$prerelease) {
     $latest = Invoke-GitHub api "repos/$Repository/releases/latest" | ConvertFrom-Json
     if ($latest.tag_name -ne $tag) { throw 'New build was not marked Latest' }

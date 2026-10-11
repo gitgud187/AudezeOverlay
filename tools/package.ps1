@@ -1,7 +1,6 @@
 param(
     [string]$BinaryPath,
     [string]$CompilerPath,
-    [string]$BuildLabel,
     [string]$Target = 'x86_64-pc-windows-msvc'
 )
 $ErrorActionPreference = 'Stop'
@@ -10,8 +9,6 @@ Push-Location $root
 try {
     $match = Select-String -LiteralPath 'Cargo.toml' -Pattern '^version = "([^"]+)"' | Select-Object -First 1
     $version = $match.Matches[0].Groups[1].Value
-    if (!$BuildLabel) { $BuildLabel = $version }
-    if ($BuildLabel -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Invalid package version label.' }
     if (!$BinaryPath) {
         cargo build --locked --release --target $Target --bin audeze-overlay
         if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
@@ -40,7 +37,7 @@ try {
     & (Join-Path $PSScriptRoot 'dependency-notices.ps1') -OutputPath (Join-Path $stage 'DEPENDENCY-LICENSES.txt') -Target $Target
     $zip = Join-Path $out 'Audeze-Overlay-Portable.zip'
     Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Force
-    & $compiler /Qp "/DAppVersion=$version" "/DBuildLabel=$BuildLabel" "/DStageDir=$stage" "/DOutputDir=$out" (Join-Path $root 'installer\audeze-overlay.iss')
+    & $compiler /Qp "/DAppVersion=$version" "/DStageDir=$stage" "/DOutputDir=$out" (Join-Path $root 'installer\audeze-overlay.iss')
     if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
     $installer = Join-Path $out 'Audeze-Overlay-Setup.exe'
     $lines = foreach ($file in @($zip, $installer)) {

@@ -6,7 +6,7 @@ A lightweight, native Rust overlay for Audeze Maxwell headset controls. Turn the
 game/chat wheel and get a visual readout, or open the panel to adjust sound and EQ.
 It talks directly to the USB dongle, so **Audeze App can stay closed**.
 
-Development builds also include experimental wired USB and additional Maxwell
+The app also includes experimental wired USB and additional Maxwell
 profiles. See the [coverage and validation matrix](docs/DEVICE_PROTOCOL.md);
 additional hardware is not yet verified and non-ANC custom EQ editing is disabled.
 

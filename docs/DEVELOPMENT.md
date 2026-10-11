@@ -73,32 +73,36 @@ and creates an x64 portable ZIP, per-user installer and SHA-256
 checksums. Open **Actions → Windows build and release → Artifacts → windows-x64**
 for development builds. Layout preview images are a separate artifact.
 
-Successful pushes to `main` publish the portable ZIP and installer as the
+Successful pushes to `main` automatically publish a new package version as the
 [latest release](https://github.com/temdah/AudezeOverlay/releases/latest).
-Each released main commit gets its own `main-<12-character commit>` tag, build
-number and publication date. Older releases and downloads remain in the release
-history; the newest build is marked **Latest**. No manual tag is needed.
-Release notes include download instructions and an automatic commit changelog
-since the previous published release. Numbered releases use GitHub's generated notes.
+The title is **Audeze Overlay 1.0.0**, with a matching `v1.0.0` tag. Future
+releases use versions such as 1.0.1 or 1.1.0. There are no build-number titles.
+Older releases and downloads remain in history.
 
-`tools/publish-release.ps1` uploads the three downloads to a draft before making
-it public. A retry can repair a draft, but preserves already published downloads
-and notes. Superseded main builds do not replace Latest. The former `development`
-release is retained as an archived build. Run `tools/test-publish-release.ps1`
-to check publication behavior locally without credentials or network access.
+Before shipping changes:
 
-To additionally publish a numbered release, set the version in `Cargo.toml`, run `cargo check` to
-update `Cargo.lock`, commit, then push a matching version tag:
+1. Increment `version` in `Cargo.toml`, update `Cargo.lock` with Cargo and rebuild.
+2. Write `docs/releases/<version>.md` describing features, fixes and relevant
+   limitations in language intended for users. These reviewed highlights become
+   **What's new** automatically. Commit messages are not release notes.
+3. Commit and push to `main`. CI builds, tests, packages and publishes the version.
 
-```powershell
-git tag v0.4.1
-git push origin v0.4.1
-```
+A push with an already released version runs the checks and produces CI artifacts
+but does not publish another release or replace existing downloads. This lets
+maintenance and documentation changes land without duplicating a release.
+For a release from another branch, push a `v` tag matching its package version;
+its matching release-notes file is also required. Hyphenated versions are prereleases.
 
-The tag must match the package version. The workflow publishes the tested
-downloads to GitHub Releases with generated release notes. Ordinary branches
-create build artifacts. Version tags containing a hyphen publish prereleases;
-main builds publish a normal release marked **Latest**. Release publishing uses the repository's built-in
+`tools/publish-release.ps1` uploads the installer, portable ZIP and checksums to a
+draft before publishing. A retry can repair a draft but cannot overwrite a public
+release. Superseded main builds do not replace Latest. Run
+`tools/test-publish-release.ps1` locally to check this behavior without credentials
+or network access.
+
+Windows displays **Audeze Overlay** in the installer, Start menu and installed
+apps list. The separate version metadata identifies the package version. The
+installer's application ID stays the same so updates replace the existing app.
+Release publishing uses the repository's built-in
 `GITHUB_TOKEN`; no personal token or extra repository secret is required.
 Publishing permissions are limited to the release job. Actions are pinned to
 commit hashes, and the Inno Setup compiler download has a pinned SHA-256 hash.

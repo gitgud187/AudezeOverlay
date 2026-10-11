@@ -1,15 +1,13 @@
 #ifndef AppVersion
   #error AppVersion must be provided by tools/package.ps1
 #endif
-#ifndef BuildLabel
-  #define BuildLabel AppVersion
-#endif
 
 [Setup]
 AppId={{B0759B40-FCA4-4A47-B8D2-5C07B8FD5D5B}
 AppName=Audeze Overlay
 AppVersion={#AppVersion}
-AppVerName=Audeze Overlay {#BuildLabel}
+AppVerName=Audeze Overlay
+UninstallDisplayName=Audeze Overlay
 AppPublisher=Audeze Overlay contributors
 DefaultDirName={localappdata}\Programs\Audeze Overlay
 DefaultGroupName=Audeze Overlay

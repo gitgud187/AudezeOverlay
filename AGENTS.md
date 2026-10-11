@@ -175,14 +175,19 @@ and `-Target x86_64-pc-windows-gnullvm`. Inspect archive contents and checksums.
   the conversation. A routine edit alone does not require an unsolicited push.
   If credentials fail, report the failure; do not print tokens or change accounts.
 - Branch pushes run checks and create artifacts. After integration, a successful
-  push to `main` publishes a new **Latest** release under `main-<12-character SHA>`.
+  push to `main` publishes a new **Latest** release under `v<Cargo.toml version>`
+  when that version has not already been released. Increment the package version
+  for release changes (for example 1.0.0 -> 1.0.1), update Cargo.lock, and write
+  `docs/releases/<version>.md` with user-facing highlights before pushing.
   Previous releases and assets remain in history; never move their tags or replace
-  their downloads. Release notes automatically list changes since the previous release.
+  their downloads. CI publishes the reviewed highlights automatically; never use
+  commit subjects or generated technical changelogs as What's new. Release titles
+  are `Audeze Overlay <version>`; the installed Windows name is `Audeze Overlay`.
   A main push is therefore a public release action. Integrate remote changes
   without overwriting others, and verify the CI run for the exact pushed SHA.
 - Numbered tags must be `v` plus the exact version in `Cargo.toml`. Update
   `Cargo.lock` and rebuild after version changes. Create a numbered tag only for
-  an intended versioned release; it is not required for automatic main releases.
+  an intended versioned release; main publication creates the matching tag itself.
 - Publication is complete only after build and release jobs succeed and
   `https://api.github.com/repos/temdah/AudezeOverlay/releases/latest` has the
   expected commit in its notes and the three intended assets:
