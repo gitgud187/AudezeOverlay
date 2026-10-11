@@ -225,31 +225,8 @@ impl<'a> Canvas<'a> {
             None,
         );
     }
-    pub fn rolling_text(&mut self, text: &str, r: Box2, size: f32, clip: Box2, blur: f32) {
-        if blur > 0.05 {
-            for offset in [-blur, blur] {
-                self.text_region(
-                    text,
-                    Box2::new(r.x, r.y + offset, r.w, r.h),
-                    size,
-                    0xf3f3f3,
-                    true,
-                    true,
-                    0.16,
-                    Some(clip),
-                );
-            }
-        }
-        self.text_region(
-            text,
-            r,
-            size,
-            0xf3f3f3,
-            true,
-            true,
-            if blur > 0.05 { 0.84 } else { 1. },
-            Some(clip),
-        );
+    pub fn fading_text(&mut self, text: &str, r: Box2, size: f32, clip: Box2, opacity: f32) {
+        self.text_region(text, r, size, 0xf3f3f3, true, true, opacity, Some(clip));
     }
     pub fn line(&mut self, pts: &[(f32, f32)], color: u32, alpha: f32, width: f32) {
         if pts.len() < 2 {

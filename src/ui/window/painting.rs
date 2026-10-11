@@ -2,9 +2,78 @@
 use super::*;
 pub(super) struct Bitmap {
     dc: HDC,
-    bitmap: HBITMAP,
+    pub(super) bitmap: HBITMAP,
     old: HGDIOBJ,
     size: SIZE,
+    bits: std::ptr::NonNull<u8>,
+}
+impl Bitmap {
+    unsafe fn new(w: u32, h: u32) -> Option<Self> {
+        let dc = CreateCompatibleDC(None);
+        if dc.is_invalid() {
+            return None;
+        }
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: w as i32,
+                biHeight: -(h as i32),
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits = std::ptr::null_mut();
+        let Ok(bitmap) = CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0)
+        else {
+            let _ = DeleteDC(dc);
+            return None;
+        };
+        let Some(bits) = std::ptr::NonNull::new(bits.cast::<u8>()) else {
+            let _ = DeleteObject(bitmap.into());
+            let _ = DeleteDC(dc);
+            return None;
+        };
+        let old = SelectObject(dc, bitmap.into());
+        if old.is_invalid() || old.0 as isize == -1 {
+            let _ = DeleteObject(bitmap.into());
+            let _ = DeleteDC(dc);
+            return None;
+        }
+        Some(Self {
+            dc,
+            bitmap,
+            old,
+            size: SIZE {
+                cx: w as i32,
+                cy: h as i32,
+            },
+            bits,
+        })
+    }
+
+    fn write(&mut self, pixels: &[u8]) {
+        let len = (self.size.cx as usize) * (self.size.cy as usize) * 4;
+        // Both dimensions come from this frame's client rectangle.
+        assert_eq!(pixels.len(), len);
+        // SAFETY: the owned top-down 32-bit DIB has exactly this byte capacity.
+        // Its backing storage outlives this borrow; only the UI thread uses it.
+        // Finish GDI's previous use before writing the retained DIB directly.
+        let dst = unsafe {
+            let _ = GdiFlush();
+            std::slice::from_raw_parts_mut(self.bits.as_ptr(), len)
+        };
+        for (src, dst) in pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(dst.as_chunks_mut::<4>().0.iter_mut())
+        {
+            dst.copy_from_slice(&[src[2], src[1], src[0], src[3]]);
+        }
+    }
 }
 impl Drop for Bitmap {
     fn drop(&mut self) {
@@ -42,6 +111,7 @@ pub(super) unsafe fn render_frame(app: &mut App, prepare_hidden: bool) {
     if w > 8192 || h > 8192 {
         return;
     }
+    app.last_frame = Some(Instant::now());
     let mut scale = GetDpiForWindow(app.hwnd).max(96) as f32 / 96.;
     if app.settings.is_some() {
         scale = (w as f32 / 900.).min(h as f32 / 750.);
@@ -70,9 +140,6 @@ pub(super) unsafe fn render_frame(app: &mut App, prepare_hidden: bool) {
         Instant::now(),
     );
     app.motion_active = animation.active;
-    if app.motion_active {
-        SetTimer(Some(app.hwnd), TICK, 16, None);
-    }
     let view = View {
         eq_editor: Some(&app.eq_editor),
         config,
@@ -92,9 +159,16 @@ pub(super) unsafe fn render_frame(app: &mut App, prepare_hidden: bool) {
         drag_preview: app.drag_preview,
         animation: Some(&animation),
     };
-    let scene = dashboard::render(&mut app.painter, w, h, scale, &view);
+    let scene = if let Some(raster) = app.raster.take() {
+        dashboard::render_reusing(&mut app.painter, w, h, scale, &view, Some(raster))
+    } else {
+        dashboard::render(&mut app.painter, w, h, scale, &view)
+    };
     app.hits = scene.hits;
     app.cards = scene.cards;
+    if app.motion_active {
+        start_animation_timer(app);
+    }
     if app.capture {
         let _ = std::fs::create_dir_all("diagnostics");
         let name = if let Some(section) = app.settings {
@@ -107,45 +181,20 @@ pub(super) unsafe fn render_frame(app: &mut App, prepare_hidden: bool) {
             let _ = PostMessageW(Some(app.hwnd), WM_APP + 7, WPARAM(0), LPARAM(0));
         }
     }
-    let dc = CreateCompatibleDC(None);
-    let info = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: w as i32,
-            biHeight: -(h as i32),
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let mut bits = std::ptr::null_mut();
-    let Ok(bitmap) = CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0) else {
-        let _ = DeleteDC(dc);
-        return;
-    };
-    let dst = std::slice::from_raw_parts_mut(bits as *mut u8, (w * h * 4) as usize);
-    for (src, dst) in scene
-        .pix
-        .data()
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .zip(dst.as_chunks_mut::<4>().0.iter_mut())
+    if !app
+        .bitmap
+        .as_ref()
+        .is_some_and(|b| b.size.cx == w as i32 && b.size.cy == h as i32)
     {
-        dst.copy_from_slice(&[src[2], src[1], src[0], src[3]]);
+        let Some(bitmap) = Bitmap::new(w, h) else {
+            return;
+        };
+        app.bitmap = Some(bitmap);
     }
-    let old = SelectObject(dc, bitmap.into());
-    app.bitmap = Some(Bitmap {
-        dc,
-        bitmap,
-        old,
-        size: SIZE {
-            cx: w as i32,
-            cy: h as i32,
-        },
-    });
+    if let Some(bitmap) = &mut app.bitmap {
+        bitmap.write(scene.pix.data());
+    }
+    app.raster = Some(scene.pix);
     present(app);
     if let Some(delivery) = app.telemetry_at {
         device::trace_present(delivery, app.alpha, app.sound.mix.map(|m| m.1));

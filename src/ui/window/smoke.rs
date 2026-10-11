@@ -34,6 +34,34 @@ pub(super) unsafe fn smoke(app: &mut App) {
             app.alpha = 255;
             app.fade_in = None;
             render(app);
+            let bitmap = app.bitmap.as_ref().map(|b| b.bitmap);
+            let raster = app.raster.as_ref().map(|p| p.data().as_ptr());
+            render(app);
+            app.checks.push((
+                "animation_reuses_bitmap_and_raster".into(),
+                bitmap.is_some()
+                    && bitmap == app.bitmap.as_ref().map(|b| b.bitmap)
+                    && raster == app.raster.as_ref().map(|p| p.data().as_ptr()),
+            ));
+            // Multiple status/UI requests before the next animation tick keep
+            // just the newest state, with no extra intermediate rasterizations.
+            app.smoke = false;
+            app.last_frame = Some(Instant::now());
+            let rendered = app.last_frame;
+            app.draw_queued = true;
+            let _ = events::dispatch(app, app.hwnd, DRAW, WPARAM(0), LPARAM(0));
+            let _ = events::dispatch(app, app.hwnd, DRAW, WPARAM(0), LPARAM(0));
+            app.checks.push((
+                "animation_coalesces_draws_until_tick".into(),
+                app.last_frame == rendered && app.draw_queued && app.animation_timer,
+            ));
+            app.smoke = true;
+            app.mix_started = None;
+            let _ = events::dispatch(app, app.hwnd, WM_TIMER, WPARAM(TICK), LPARAM(0));
+            app.checks.push((
+                "animation_timer_stops_after_final_pending_frame".into(),
+                !app.draw_queued && !app.animation_timer && app.last_frame != rendered,
+            ));
             // Reconnect through the same status-message path as the worker,
             // without a mouse event or an extra device command.
             let live = app.sound.clone();

@@ -122,10 +122,10 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
                 text_width,
                 40.,
             );
-            let transition = v.animation.map(|f| f.number_progress).unwrap_or(1.);
             if let Some(current) = v.sound.mix {
-                let previous = v.animation.and_then(|f| f.previous_mix).unwrap_or(current);
-                odometer(c, value_rect, value_size, previous, current, transition);
+                let numbers = v.animation.and_then(|f| f.numbers.value).unwrap_or(current);
+                let opacity = v.animation.map(|f| f.numbers.opacity).unwrap_or(1.);
+                mix_numbers(c, value_rect, value_size, numbers, opacity);
             } else {
                 c.fitted_text(&value, value_rect, value_size, FG, true, true);
             }
@@ -592,34 +592,24 @@ pub(super) fn status_icons(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, width:
     }
 }
 
-fn odometer(c: &mut Canvas, r: Box2, size: f32, old: (u8, u8), new: (u8, u8), p: f32) {
-    let digits = |n: u8| {
-        if n == 100 {
-            3
-        } else if n >= 10 {
-            2
-        } else {
-            1
-        }
-    };
-    let game_columns = digits(new.0).max(if p < 1. { digits(old.0) } else { 0 });
-    let chat_columns = digits(new.1).max(if p < 1. { digits(old.1) } else { 0 });
-    let columns = game_columns + chat_columns + 1;
-    let cell = (r.w / columns as f32).min(size * 0.68);
+fn mix_numbers(c: &mut Canvas, r: Box2, size: f32, value: (u8, u8), opacity: f32) {
     let mut size = size;
+    // Fit the widest valid readouts, so font size stays fixed during a fade.
     while size > 10. {
         let px = (size * c.scale).round().max(1.);
-        let width = ('0'..='9')
-            .chain(Some('/'))
-            .map(|ch| c.painter.fonts[1].metrics(ch, px).advance_width / c.scale)
+        let width = ["100 / 0", "0 / 100", "50 / 50"]
+            .iter()
+            .map(|text| {
+                text.chars()
+                    .map(|ch| c.painter.fonts[1].metrics(ch, px).advance_width / c.scale)
+                    .sum::<f32>()
+            })
             .fold(0., f32::max);
-        if width + 1. <= cell {
+        if width + 1. <= r.w {
             break;
         }
         size -= 0.5;
     }
-    // Center actual numeral ink, not a font's asymmetric line box. Recalculate
-    // after fitting so narrower cards do not shift the digits off the dial axis.
     let px = (size * c.scale).round().max(1.);
     let metrics = c.painter.fonts[1].metrics('0', px);
     let ascent = c.painter.fonts[1]
@@ -627,59 +617,12 @@ fn odometer(c: &mut Canvas, r: Box2, size: f32, old: (u8, u8), new: (u8, u8), p:
         .map(|m| m.ascent)
         .unwrap_or(px);
     let ink_center = (ascent - metrics.height as f32 / 2. - metrics.ymin as f32) / c.scale;
-    let r = Box2::new(r.x, r.y + r.h / 2. - ink_center, r.w, r.h);
-    let left = r.x + (r.w - cell * columns as f32) / 2.;
-    let clip = Box2::new(left, r.y, cell * columns as f32, size + 8.);
-    c.text_clipped(
-        "/",
-        Box2::new(left + cell * game_columns as f32, r.y, cell, r.h),
+    let text_rect = Box2::new(r.x, r.y + r.h / 2. - ink_center, r.w, r.h);
+    c.fading_text(
+        &format!("{} / {}", value.0, value.1),
+        text_rect,
         size,
-        FG,
-        true,
-        true,
-        clip,
+        r,
+        opacity,
     );
-    for (side, before, after) in [(0, old.0, new.0), (game_columns + 1, old.1, new.1)] {
-        let a = if side == 0 {
-            format!("{before:>game_columns$}")
-        } else {
-            format!("{before:<chat_columns$}")
-        };
-        let b = if side == 0 {
-            format!("{after:>game_columns$}")
-        } else {
-            format!("{after:<chat_columns$}")
-        };
-        let direction = if after >= before { -1. } else { 1. };
-        for (column, (a, b)) in a.chars().zip(b.chars()).enumerate() {
-            let x = left + (side + column) as f32 * cell;
-            if a == b || p >= 1. {
-                c.text_clipped(
-                    &b.to_string(),
-                    Box2::new(x, r.y, cell, r.h),
-                    size,
-                    FG,
-                    true,
-                    true,
-                    clip,
-                );
-            } else {
-                let distance = size + 8.;
-                c.rolling_text(
-                    &a.to_string(),
-                    Box2::new(x, r.y + direction * p * distance, cell, r.h),
-                    size,
-                    clip,
-                    1.4 * (std::f32::consts::PI * p).sin(),
-                );
-                c.rolling_text(
-                    &b.to_string(),
-                    Box2::new(x, r.y - direction * (1. - p) * distance, cell, r.h),
-                    size,
-                    clip,
-                    1.4 * (std::f32::consts::PI * p).sin(),
-                );
-            }
-        }
-    }
 }

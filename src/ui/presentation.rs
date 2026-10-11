@@ -1,5 +1,8 @@
 //! Presentation state bridges pure transitions to the rasterizer. No device I/O.
-use super::draw::Box2;
+use super::{
+    draw::Box2,
+    number_fade::{NumberFade, NumberFrame},
+};
 use audeze_overlay::{
     model::SoundState,
     motion::{ease, progress, SelectionFrame, SelectionMotion, Tween},
@@ -9,20 +12,18 @@ use std::time::Instant;
 pub struct AnimationFrame {
     pub cards: [Box2; 6],
     pub grip: f32,
-    pub previous_mix: Option<(u8, u8)>,
-    pub number_progress: f32,
+    pub numbers: NumberFrame,
     pub anc: SelectionFrame,
     pub noise: SelectionFrame,
     pub active: bool,
 }
+
 pub struct Presentation {
     cards_from: [Box2; 6],
     cards_to: Option<[Box2; 6]>,
     cards_started: Instant,
     grip: Tween,
-    current_mix: Option<(u8, u8)>,
-    previous_mix: Option<(u8, u8)>,
-    number_started: Instant,
+    numbers: NumberFade,
     anc: SelectionMotion,
     noise: SelectionMotion,
 }
@@ -34,9 +35,7 @@ impl Default for Presentation {
             cards_to: None,
             cards_started: now,
             grip: Tween::new(0., now),
-            current_mix: None,
-            previous_mix: None,
-            number_started: now,
+            numbers: NumberFade::default(),
             anc: SelectionMotion::new(now),
             noise: SelectionMotion::new(now),
         }
@@ -83,16 +82,7 @@ impl Presentation {
             now,
             if animate { 110 } else { 0 },
         );
-        if self.current_mix != sound.mix {
-            self.previous_mix = self.current_mix;
-            self.current_mix = sound.mix;
-            self.number_started = now;
-        }
-        let number_progress = if animate && self.previous_mix.is_some() {
-            ease(progress(self.number_started, now, 110))
-        } else {
-            1.
-        };
+        let numbers = self.numbers.frame(sound.mix, animate, now);
         let anc = self.anc.update(
             ["On", "Off", "Transparency"]
                 .iter()
@@ -110,14 +100,13 @@ impl Presentation {
         let active = animate
             && ((self.cards_from != cards && progress(self.cards_started, now, 130) < 1.)
                 || self.grip.active(now)
-                || number_progress < 1.
+                || numbers.active
                 || self.anc.active(now)
                 || self.noise.active(now));
         AnimationFrame {
             cards: self.card_frame(now, animate),
             grip: self.grip.value(now),
-            previous_mix: self.previous_mix,
-            number_progress,
+            numbers,
             anc,
             noise,
             active,

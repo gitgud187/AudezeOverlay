@@ -4,6 +4,8 @@
 mod dashboard;
 #[path = "../ui/draw.rs"]
 mod draw;
+#[path = "../ui/number_fade.rs"]
+mod number_fade;
 #[path = "../ui/presentation.rs"]
 mod presentation;
 

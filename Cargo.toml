@@ -1,6 +1,6 @@
 [package]
 name = "audeze-overlay"
-version = "1.0.3"
+version = "1.0.4"
 edition = "2021"
 description = "A small native Windows sound-status overlay for Audeze Maxwell"
 license = "MIT"
@@ -38,7 +38,8 @@ svgtypes = "0.16.1"
 embed-resource = "3.0.11"
 
 [profile.release]
-opt-level = "s"
+# Rasterization runs on the CPU. Favor vectorized drawing over the smallest EXE.
+opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"

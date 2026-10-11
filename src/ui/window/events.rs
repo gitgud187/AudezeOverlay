@@ -98,7 +98,24 @@ pub(super) unsafe fn dispatch(
             Some(LRESULT(0))
         }
         DRAW => {
-            render(app);
+            if !app.smoke
+                && !app.capture
+                && IsWindowVisible(hwnd).as_bool()
+                && (app.animation_timer
+                    || app
+                        .last_frame
+                        .is_some_and(|t| t.elapsed() < Duration::from_millis(16)))
+            {
+                // Keep one pending redraw. The existing animation timer will
+                // render the newest state, rather than enqueueing intermediate frames.
+                start_animation_timer(app);
+                if !app.animation_timer {
+                    // A failed native timer must not strand the pending redraw.
+                    render(app);
+                }
+            } else {
+                render(app);
+            }
             Some(LRESULT(0))
         }
         m if m == WM_APP + 7 => {
@@ -380,7 +397,7 @@ pub(super) unsafe fn dispatch(
                 hide(app)
             } else {
                 app.fade_out = Some(Instant::now());
-                SetTimer(Some(hwnd), TICK, 16, None);
+                start_animation_timer(app);
             }
             Some(LRESULT(0))
         }
@@ -406,21 +423,21 @@ pub(super) unsafe fn dispatch(
                     app.fade_in = None;
                 }
             }
+            let mix_active = app.mix_started.is_some();
             if let Some(t) = app.mix_started {
-                request_draw(app);
                 if t.elapsed() > Duration::from_millis(MIX_ANIMATION_MS) {
                     app.mix_started = None;
                 }
             }
-            if app.motion_active {
-                request_draw(app);
+            if mix_active || app.motion_active || app.draw_queued {
+                render(app);
             }
             if app.fade_in.is_none()
                 && app.fade_out.is_none()
                 && app.mix_started.is_none()
                 && !app.motion_active
             {
-                let _ = KillTimer(Some(hwnd), TICK);
+                stop_animation_timer(app);
             }
             Some(LRESULT(0))
         }

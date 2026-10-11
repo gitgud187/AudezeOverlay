@@ -146,7 +146,30 @@ pub fn card_boxes(config: &Config, _w: f32, _h: f32) -> [Box2; 6] {
     })
 }
 pub fn render(painter: &mut Painter, width: u32, height: u32, scale: f32, v: &View) -> Scene {
-    let mut c = Canvas::new(painter, width, height, scale);
+    render_reusing(painter, width, height, scale, v, None)
+}
+
+/// Reuse only an exactly sized raster surface; clear it so removed/transparent
+/// content cannot leave pixels from the previous frame. Hit regions are rebuilt.
+pub fn render_reusing(
+    painter: &mut Painter,
+    width: u32,
+    height: u32,
+    scale: f32,
+    v: &View,
+    previous: Option<tiny_skia::Pixmap>,
+) -> Scene {
+    let mut pix = previous
+        .filter(|p| p.width() == width && p.height() == height)
+        .unwrap_or_else(|| {
+            tiny_skia::Pixmap::new(width, height).expect("Validated canvas dimensions")
+        });
+    pix.fill(tiny_skia::Color::TRANSPARENT);
+    let mut c = Canvas {
+        pix,
+        scale,
+        painter,
+    };
     let (w, h) = (width as f32 / scale, height as f32 / scale);
     let mut hits = vec![];
     let settings = v.settings.is_some();

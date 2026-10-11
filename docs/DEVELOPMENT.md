@@ -39,6 +39,14 @@ by the separate `check-blur` diagnostic against a controlled desktop pattern.
 Legacy accessibility diagnostics remain for comparison; the active app uses
 `src/device/`. Build the old diagnostics with `--features legacy-uia`.
 
+`cargo run --locked --release --bin bench-render` exercises 600 rasterized
+animation frames after warm-up, with simulated wheel updates about every 50 ms.
+It reports mean and 95th-percentile frame time and checks reused pixels against
+fresh renders during warm-up. It opens no window and makes no headset calls.
+This measures CPU rasterization, not Windows composition, physical input latency,
+or game FPS. Keep the release profile consistent when comparing runs; the drawing
+path is substantially slower with size optimization than speed optimization.
+
 For intermittent latency diagnostics, launch with `--trace-usb`. A bounded
 `usb-timing.csv` beside the executable records scheduled queries, raw replies,
 parsed values, timeouts, and receipt-to-presentation time. Sequence numbers link

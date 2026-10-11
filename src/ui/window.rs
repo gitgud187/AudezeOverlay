@@ -89,6 +89,7 @@ struct App {
     presentation: super::presentation::Presentation,
     motion_active: bool,
     bitmap: Option<Bitmap>,
+    raster: Option<tiny_skia::Pixmap>,
     hits: Vec<Hit>,
     cards: [Box2; 6],
     settings: Option<usize>,
@@ -117,6 +118,8 @@ struct App {
     fade_out: Option<Instant>,
     alpha: u8,
     draw_queued: bool,
+    animation_timer: bool,
+    last_frame: Option<Instant>,
     telemetry_at: Option<device::Delivery>,
     applied_blur: Option<u8>,
     notification_options: bool,
@@ -235,6 +238,7 @@ unsafe fn run() -> Result<()> {
         presentation: super::presentation::Presentation::default(),
         motion_active: false,
         bitmap: None,
+        raster: None,
         hits: vec![],
         cards: [Box2::default(); 6],
         settings: if args.iter().any(|s| s == "--settings") {
@@ -274,6 +278,8 @@ unsafe fn run() -> Result<()> {
         fade_out: None,
         alpha: 255,
         draw_queued: false,
+        animation_timer: false,
+        last_frame: None,
         telemetry_at: None,
         applied_blur: None,
         notification_options: false,
@@ -466,6 +472,15 @@ unsafe fn request_draw(app: &mut App) {
         let _ = PostMessageW(Some(app.hwnd), DRAW, WPARAM(0), LPARAM(0));
     }
 }
+unsafe fn start_animation_timer(app: &mut App) {
+    if !app.animation_timer {
+        app.animation_timer = SetTimer(Some(app.hwnd), TICK, 16, None) != 0;
+    }
+}
+unsafe fn stop_animation_timer(app: &mut App) {
+    let _ = KillTimer(Some(app.hwnd), TICK);
+    app.animation_timer = false;
+}
 unsafe fn show(app: &mut App, interactive: bool) {
     if interactive {
         if let Some(controller) = &app.controller {
@@ -538,7 +553,7 @@ unsafe fn show(app: &mut App, interactive: bool) {
         SetTimer(Some(app.hwnd), HOLD, app.config.duration_ms, None);
     }
     if app.fade_in.is_some() {
-        SetTimer(Some(app.hwnd), TICK, 16, None);
+        start_animation_timer(app);
     }
 }
 unsafe fn hide(app: &mut App) {
@@ -561,7 +576,7 @@ unsafe fn hide(app: &mut App) {
     app.motion_active = false;
     app.drag = Drag::None;
     let _ = ReleaseCapture();
-    let _ = KillTimer(Some(app.hwnd), TICK);
+    stop_animation_timer(app);
     let _ = KillTimer(Some(app.hwnd), HOLD);
     let _ = ShowWindow(app.hwnd, SW_HIDE);
 }
@@ -701,7 +716,7 @@ unsafe fn set_mix(app: &mut App, p: u8) {
         app.mix_to = target;
         app.mix_started = (app.config.animations && !app.smoke).then(Instant::now);
         if app.mix_started.is_some() {
-            SetTimer(Some(app.hwnd), TICK, 16, None);
+            start_animation_timer(app);
         }
     }
 }
@@ -907,17 +922,26 @@ unsafe fn changed(app: &mut App) {
         }
     }
     if (popup || alert) && app.config.auto_show && !app.interactive {
-        app.popup_cards = app
+        let popup_cards = app
             .config
             .changed_card_only
             .then_some(changed_cards | if alert { 1 << 4 } else { 0 });
-        show(app, false);
+        if IsWindowVisible(app.hwnd).as_bool() && app.popup_cards == popup_cards {
+            // A physical knob can generate 20 updates/second. Refresh the hold
+            // deadline without repeating ShowWindow, clipping or positioning.
+            app.fade_out = None;
+            app.alpha = 255;
+            SetTimer(Some(app.hwnd), HOLD, app.config.duration_ms, None);
+        } else {
+            app.popup_cards = popup_cards;
+            show(app, false);
+        }
     }
     if IsWindowVisible(app.hwnd).as_bool() {
         app.telemetry_at = device::delivery_time();
         request_draw(app);
         if app.mix_started.is_some() {
-            SetTimer(Some(app.hwnd), TICK, 16, None);
+            start_animation_timer(app);
         }
     }
 }
