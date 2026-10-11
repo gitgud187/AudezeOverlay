@@ -1,14 +1,14 @@
 //! Settings actions, input drafts, hotkey registration and factory reset.
 use super::*;
-pub(super) unsafe fn confirm_recording(app: &mut App) -> bool {
+pub(in crate::ui) fn confirm_recording(app: &mut App) -> bool {
     if !app.recording {
         return true;
     }
-    let choice = MessageBoxW(Some(app.hwnd), w!("Save the recorded shortcut before leaving?\nYes: save. No: discard. Cancel: keep recording."), w!("Unsaved shortcut"), MB_YESNOCANCEL | MB_ICONQUESTION);
-    if choice == IDYES {
+    let choice = app.shell.confirm("Unsaved shortcut", "Save the recorded shortcut before leaving?\nYes: save. No: discard. Cancel: keep recording.", Buttons::YesNoCancel);
+    if choice == Choice::Yes {
         finish_recording(app);
         !app.recording
-    } else if choice == IDNO {
+    } else if choice == Choice::No {
         app.recording = false;
         app.recorded_key = None;
         true
@@ -16,7 +16,7 @@ pub(super) unsafe fn confirm_recording(app: &mut App) -> bool {
         false
     }
 }
-pub(super) unsafe fn commit_number(app: &mut App) -> bool {
+pub(in crate::ui) fn commit_number(app: &mut App) -> bool {
     let Some(draft) = app.number_edit.as_ref() else {
         return true;
     };
@@ -37,23 +37,19 @@ pub(super) unsafe fn commit_number(app: &mut App) -> bool {
         }
     }
 }
-pub(super) unsafe fn factory_reset(app: &mut App) {
+pub(in crate::ui) fn factory_reset(app: &mut App) {
     if !app.demo {
-        if let Err(message) = startup(false) {
+        if let Err(message) = app.shell.set_autostart(false) {
             app.note = message.into();
             return;
         }
     }
-    let _ = UnregisterHotKey(Some(app.hwnd), app.hotkey_id);
+    app.shell.unregister_hotkey();
     app.config = Config::default();
     app.eq_editor = audeze_overlay::eq::Editor::default();
-    app.hotkey_registered = RegisterHotKey(
-        Some(app.hwnd),
-        app.hotkey_id,
-        HOT_KEY_MODIFIERS(app.config.hotkey_mod) | MOD_NOREPEAT,
-        app.config.hotkey_vk,
-    )
-    .is_ok();
+    app.hotkey_registered = app
+        .shell
+        .register_hotkey(app.config.hotkey_mod, app.config.hotkey_vk);
     app.recording = false;
     app.recorded_key = None;
     app.number_edit = None;
@@ -72,7 +68,7 @@ pub(super) unsafe fn factory_reset(app: &mut App) {
     save(app);
     show(app, true);
 }
-pub(super) unsafe fn set_slider(app: &mut App, key: &'static str, x: f32) {
+pub(in crate::ui) fn set_slider(app: &mut App, key: &'static str, x: f32) {
     let Some(hit) = app.hits.iter().find(|h| h.action == Action::Slider(key)) else {
         return;
     };
@@ -81,10 +77,10 @@ pub(super) unsafe fn set_slider(app: &mut App, key: &'static str, x: f32) {
     let value = ((min + f * (max - min)) / 5.).round() * 5.;
     slider_value(app, key, value);
 }
-pub(super) unsafe fn slider_value(app: &mut App, key: &'static str, value: f32) {
+pub(in crate::ui) fn slider_value(app: &mut App, key: &'static str, value: f32) {
     apply_numeric(app, key, (value / 5.).round() * 5.);
 }
-pub(super) unsafe fn apply_numeric(app: &mut App, key: &'static str, value: f32) {
+pub(in crate::ui) fn apply_numeric(app: &mut App, key: &'static str, value: f32) {
     let c = &mut app.config;
     match key {
         "scale" => {
@@ -102,7 +98,7 @@ pub(super) unsafe fn apply_numeric(app: &mut App, key: &'static str, value: f32)
         "blur" => {
             c.blur_strength = value.clamp(0., 100.) as u8;
             c.background_blur = c.blur_strength > 0;
-            let _ = crate::platform::blur::apply_strength(app.hwnd, c.blur_strength);
+            app.shell.set_blur(c.blur_strength);
             app.applied_blur = Some(c.blur_strength);
         }
         "rows" => {
@@ -128,25 +124,12 @@ pub(super) unsafe fn apply_numeric(app: &mut App, key: &'static str, value: f32)
     c.fit_layout();
     request_draw(app);
 }
-pub(super) unsafe fn select_monitor(app: &mut App) {
-    let Ok(menu) = CreatePopupMenu() else { return };
-    let _ = AppendMenuW(menu, MF_STRING, 1, w!("Auto — active screen"));
+pub(in crate::ui) fn select_monitor(app: &mut App) {
+    let mut entries = vec![MenuEntry::item(1, "Auto — active screen")];
     for (i, m) in app.monitors.iter().enumerate() {
-        let _ = AppendMenuW(menu, MF_STRING, i + 2, PCWSTR(wide(&m.label).as_ptr()));
+        entries.push(MenuEntry::item(i as u32 + 2, m.label.clone()));
     }
-    let mut p = POINT::default();
-    let _ = GetCursorPos(&mut p);
-    let id = TrackPopupMenu(
-        menu,
-        TPM_RETURNCMD | TPM_NONOTIFY,
-        p.x,
-        p.y,
-        None,
-        app.hwnd,
-        None,
-    )
-    .0;
-    if id > 0 {
+    if let Some(id) = app.shell.popup_menu(&entries, MenuOrigin::Panel) {
         app.config.monitor = if id == 1 {
             String::new()
         } else {
@@ -154,9 +137,8 @@ pub(super) unsafe fn select_monitor(app: &mut App) {
         };
         app.config.position = None;
     }
-    let _ = DestroyMenu(menu);
 }
-pub(super) unsafe fn setting(app: &mut App, key: &str, n: i32) {
+pub(in crate::ui) fn setting(app: &mut App, key: &str, n: i32) {
     if matches!(
         key,
         "card0" | "card1" | "card2" | "card3" | "card4" | "card5"
@@ -202,7 +184,7 @@ pub(super) unsafe fn setting(app: &mut App, key: &str, n: i32) {
         "automatic" => c.auto_show = !c.auto_show,
         "blur" => {
             c.background_blur = !c.background_blur;
-            let _ = crate::platform::blur::apply(app.hwnd, c.background_blur);
+            app.shell.set_blur_enabled(c.background_blur);
             c.blur_strength = if c.background_blur { 50 } else { 0 };
             app.applied_blur = Some(c.blur_strength);
         }
@@ -255,7 +237,7 @@ pub(super) unsafe fn setting(app: &mut App, key: &str, n: i32) {
             if app.demo {
                 c.autostart = enabled;
             } else {
-                match startup(enabled) {
+                match app.shell.set_autostart(enabled) {
                     Ok(()) => c.autostart = enabled,
                     Err(e) => app.note = e.into(),
                 }
@@ -272,28 +254,7 @@ pub(super) unsafe fn setting(app: &mut App, key: &str, n: i32) {
     app.config.fit_layout();
     save(app);
 }
-pub(super) unsafe fn record(app: &mut App, vk: u32) {
-    if !app.recording {
-        return;
-    }
-    if vk == VK_ESCAPE.0 as u32 {
-        app.recording = false;
-        return;
-    }
-    if matches!(vk,0x10..=0x12|0x5b..=0x5c|0xa0..=0xa5) {
-        return;
-    }
-    let down = |k: VIRTUAL_KEY| GetKeyState(k.0 as i32) < 0;
-    let mods =
-        u32::from(down(VK_MENU)) + 2 * u32::from(down(VK_CONTROL)) + 4 * u32::from(down(VK_SHIFT));
-    if !valid_hotkey(mods, vk) || down(VK_LWIN) || down(VK_RWIN) {
-        app.note = "Choose one key, or Alt / Ctrl / Shift plus one key. F12 is reserved.".into();
-        return;
-    }
-    app.recorded_key = Some((mods, vk));
-    app.note.clear();
-}
-pub(super) unsafe fn finish_recording(app: &mut App) {
+pub(in crate::ui) fn finish_recording(app: &mut App) {
     if !app.recording {
         return;
     }
@@ -305,21 +266,7 @@ pub(super) unsafe fn finish_recording(app: &mut App) {
         app.recording = false;
         return;
     }
-    let candidate = if app.hotkey_id >= 100 {
-        app.hotkey_id - 100
-    } else {
-        app.hotkey_id + 100
-    };
-    if RegisterHotKey(
-        Some(app.hwnd),
-        candidate,
-        HOT_KEY_MODIFIERS(mods) | MOD_NOREPEAT,
-        vk,
-    )
-    .is_ok()
-    {
-        let _ = UnregisterHotKey(Some(app.hwnd), app.hotkey_id);
-        app.hotkey_id = candidate;
+    if app.shell.rebind_hotkey(mods, vk) {
         app.hotkey_registered = true;
         app.config.hotkey_mod = mods;
         app.config.hotkey_vk = vk;

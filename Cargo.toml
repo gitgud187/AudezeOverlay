@@ -8,6 +8,10 @@ license = "MIT"
 [features]
 legacy-uia = []
 perf-stats = []
+# Extra checks and a state transcript for `--smoke-test --smoke-golden`, used to
+# compare behavior before and after a refactor. Adds about 52 KB, so it is not
+# part of release builds.
+golden-checks = []
 
 [[bin]]
 name = "bench-worker"

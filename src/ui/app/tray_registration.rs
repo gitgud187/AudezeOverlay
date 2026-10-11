@@ -1,6 +1,6 @@
 //! Retry only failed Shell registration; successful/idle trays have no timer.
 #[derive(Default)]
-pub(super) struct TrayRegistration {
+pub(in crate::ui) struct TrayRegistration {
     failures: u8,
     pub registered: bool,
 }

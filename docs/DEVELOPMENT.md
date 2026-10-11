@@ -26,6 +26,12 @@ and write `diagnostics/smoke-v3.json`. The worker check reads live state without
 changing sound. The separate opt-in `verify-direct --controls-and-restore`
 diagnostic temporarily changes and restores sound settings.
 
+For a refactor that must not change behavior, build with
+`--features golden-checks` and run `--smoke-test --smoke-golden`. That adds twenty
+more smoke checks and writes `diagnostics/ui-golden.txt`, a hash of the full
+application state after each scripted step. Run it before and after the change
+and compare the files line by line. The feature is left out of release builds.
+
 For installed-app startup tests, verify preferences and the Run entry from the
 normal Windows user session as well as the diagnostic shell. Isolated tooling
 can expose a redirected settings or registry view even when the printed path
