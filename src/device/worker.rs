@@ -236,6 +236,12 @@ pub fn start(
         error: Arc::new(Mutex::new(None)),
     };
     let worker = c.clone();
+    // Where the platform can report hot-plug itself, it wakes the worker to
+    // re-enumerate; elsewhere the shell calls `devices_changed` on its own.
+    super::hid::watch_hotplug({
+        let controller = c.clone();
+        move || controller.devices_changed()
+    });
     thread::spawn(move || {
         let mut trace = Trace::new();
         let (ui_tx, ui_rx) = sync_channel(64);

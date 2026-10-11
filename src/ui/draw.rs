@@ -58,31 +58,87 @@ pub fn asset(name: &str) -> Option<PathBuf> {
     .into_iter()
     .find(|p| p.exists())
 }
+#[derive(Clone, Copy)]
+enum FontWeight {
+    Regular,
+    Semibold,
+}
+/// The platform's UI font for `weight`: Segoe UI on Windows.
+#[cfg(windows)]
+fn system_font(weight: FontWeight) -> Option<PathBuf> {
+    let file = match weight {
+        FontWeight::Regular => "segoeui.ttf",
+        FontWeight::Semibold => "seguisb.ttf",
+    };
+    Some(PathBuf::from(r"C:\Windows\Fonts").join(file))
+}
+/// The user's default sans-serif as named by fontconfig, then common font files.
+/// Run once at startup; no font is bundled with the application.
+#[cfg(not(windows))]
+fn system_font(weight: FontWeight) -> Option<PathBuf> {
+    let (pattern, fallbacks) = match weight {
+        FontWeight::Regular => (
+            "sans-serif:weight=regular",
+            [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            ],
+        ),
+        FontWeight::Semibold => (
+            "sans-serif:weight=demibold",
+            [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            ],
+        ),
+    };
+    std::process::Command::new("fc-match")
+        .args(["-f", "%{file}", pattern])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|file| usable_font_file(file.trim()))
+        .or_else(|| fallbacks.iter().find_map(|path| usable_font_file(path)))
+}
+/// An existing absolute TrueType or OpenType file; fontdue reads nothing else.
+#[cfg(not(windows))]
+fn usable_font_file(path: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(path);
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    (path.is_absolute() && matches!(extension.as_str(), "ttf" | "otf") && path.is_file())
+        .then_some(path)
+}
+const NO_UI_FONT: &str = "No usable UI font was found. Install a sans-serif TrueType font \
+(for example DejaVu Sans or Noto Sans) and make sure fontconfig can find it.";
 impl Painter {
     pub fn new() -> Self {
-        let load = |name: &str, fallback: &str| {
-            asset(name)
+        Self::try_new().unwrap_or_else(|error| panic!("{error}"))
+    }
+    /// Loads the UI fonts, or says why that is impossible.
+    pub fn try_new() -> Result<Self, String> {
+        let load = |name: &str, weight: FontWeight| -> Result<Font, String> {
+            if let Some(font) = asset(name)
                 .and_then(|p| std::fs::read(p).ok())
                 .and_then(|b| Font::from_bytes(b, FontSettings::default()).ok())
-                .unwrap_or_else(|| {
-                    Font::from_bytes(
-                        std::fs::read(fallback).expect("Windows UI font"),
-                        FontSettings::default(),
-                    )
-                    .expect("Valid UI font")
-                })
+            {
+                return Ok(font);
+            }
+            let path = system_font(weight).ok_or(NO_UI_FONT)?;
+            let bytes = std::fs::read(&path)
+                .map_err(|e| format!("Could not read the UI font {}: {e}", path.display()))?;
+            Font::from_bytes(bytes, FontSettings::default())
+                .map_err(|e| format!("The UI font {} is not usable: {e}", path.display()))
         };
         // The installed Demi Bold file is a demo font whose punctuation draws a
         // watermark. Use the complete Medium face for a consistent, valid glyph set.
         let fonts = [
-            load(
-                "connary fagen - visby cf medium.otf",
-                r"C:\Windows\Fonts\segoeui.ttf",
-            ),
-            load(
-                "connary fagen - visby cf medium.otf",
-                r"C:\Windows\Fonts\seguisb.ttf",
-            ),
+            load("connary fagen - visby cf medium.otf", FontWeight::Regular)?,
+            load("connary fagen - visby cf medium.otf", FontWeight::Semibold)?,
         ];
         let mut logo = vec![];
         {
@@ -146,11 +202,11 @@ impl Painter {
                 }
             }
         }
-        Self {
+        Ok(Self {
             fonts,
             glyphs: HashMap::new(),
             logo,
-        }
+        })
     }
 }
 impl<'a> Canvas<'a> {
@@ -612,5 +668,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn only_existing_absolute_truetype_or_opentype_files_are_used() {
+        let dir = std::env::temp_dir().join(format!("audeze-font-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ttf = dir.join("Sans.TTF");
+        let bitmap = dir.join("Sans.pcf");
+        std::fs::write(&ttf, b"").unwrap();
+        std::fs::write(&bitmap, b"").unwrap();
+        assert_eq!(usable_font_file(ttf.to_str().unwrap()), Some(ttf.clone()));
+        assert_eq!(
+            usable_font_file(bitmap.to_str().unwrap()),
+            None,
+            "not fontdue-readable"
+        );
+        assert_eq!(
+            usable_font_file(dir.join("missing.ttf").to_str().unwrap()),
+            None
+        );
+        assert_eq!(
+            usable_font_file("Sans.ttf"),
+            None,
+            "relative paths are never trusted"
+        );
+        assert_eq!(usable_font_file(""), None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

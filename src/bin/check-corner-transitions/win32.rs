@@ -1,6 +1,6 @@
 //! App-only transition regression harness; not linked into the product.
 //! Run with the sound overlay open. Does not send headset commands or edit settings.
-#[path = "../platform/blur.rs"]
+#[path = "../../platform/blur.rs"]
 mod blur;
 
 use std::{
@@ -80,7 +80,7 @@ fn check(exe: &PathBuf, name: &str) -> Result<bool> {
     Ok(pass)
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let hwnd = FindWindowW(w!("AudezeOverlayWindow"), None)?;

@@ -431,13 +431,18 @@ fn showcase() {
         Color, GradientStop, LinearGradient, Paint, Pixmap, Point, SpreadMode, Transform,
     };
 
+    // The published screenshots use Segoe UI so they can be reproduced exactly.
+    // Without it the views would silently change font, so they are skipped.
+    let segoe = ["segoeui.ttf", "seguisb.ttf"]
+        .map(|name| std::fs::read(format!(r"C:\Windows\Fonts\{name}")).ok());
+    let [Some(regular), Some(semibold)] = segoe else {
+        eprintln!("Skipping the documentation showcase: it needs Segoe UI (Windows).");
+        return;
+    };
     let mut painter = Painter::new();
-    painter.fonts = ["segoeui.ttf", "seguisb.ttf"].map(|name| {
-        fontdue::Font::from_bytes(
-            std::fs::read(format!(r"C:\Windows\Fonts\{name}")).expect("public Windows font"),
-            fontdue::FontSettings::default(),
-        )
-        .expect("valid public font")
+    painter.fonts = [regular, semibold].map(|bytes| {
+        fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default())
+            .expect("valid public font")
     });
     let mut vertical = Config {
         background_opacity: 50,

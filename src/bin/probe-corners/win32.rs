@@ -134,7 +134,7 @@ unsafe fn blur_region(hwnd: HWND, radius: i32) -> HRESULT {
     let _ = DeleteObject(region.into());
     hr
 }
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let hwnd = FindWindowW(w!("AudezeOverlayWindow"), None)?;

@@ -1,0 +1,11 @@
+# Audeze Overlay: let the logged-in user read and control a supported Audeze
+# Maxwell headset or dongle through its hidraw node.
+#
+# TAG+="uaccess" grants access to whoever is logged in at the seat, through an
+# ACL managed by systemd-logind. It does not make the device world-writable, and
+# access ends when the session ends.
+#
+# Only the twelve USB product IDs the application recognizes are listed (see
+# docs/DEVICE_PROTOCOL.md): Maxwell, Maxwell 2 and Maxwell 2 ANC, each as an Xbox
+# dongle, a PlayStation dongle, or a wired headset.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3329", ATTRS{idProduct}=="4b18|4b19|4b1a|4b1e|4b28|4b29|4b2a|4b2e|4ba8|4ba9|4baa|4bae", TAG+="uaccess"

@@ -5,7 +5,7 @@ use windows::{
     core::PCWSTR,
     Win32::{Devices::HumanInterfaceDevice::*, Foundation::*, Storage::FileSystem::*},
 };
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The official backend requests 62 bytes. Compare it with our 64-byte
     // request only in this explicitly invoked, bounded read-only diagnostic.
     let report_size = if std::env::args().any(|s| s == "--official-report-size") {

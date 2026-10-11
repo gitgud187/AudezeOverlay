@@ -1,5 +1,5 @@
 //! Standalone visual test harness. Screenshot code is not linked into the app.
-#[path = "../platform/blur.rs"]
+#[path = "../../platform/blur.rs"]
 mod blur;
 use std::{
     sync::atomic::{AtomicBool, Ordering},
@@ -330,7 +330,7 @@ unsafe fn corners(overlay: HWND, r: RECT, pattern: HWND, area: RECT) -> Result<(
     Ok(())
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     unsafe {
         let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
             windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,

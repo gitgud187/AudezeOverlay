@@ -1,5 +1,7 @@
 //! Windows HID access through SetupAPI and the HID class driver.
-use super::{Enumeration, Hid, InputStream, Interface};
+use super::{
+    control_report_sizes_plausible, Enumeration, Hid, InputStream, Interface, CONTROL_USAGE,
+};
 use crate::device::{profiles::Profile, selection::Candidate};
 use windows::{
     core::PCWSTR,
@@ -137,15 +139,15 @@ pub(in crate::device) fn enumerate() -> Result<Enumeration> {
                 let usage = if identity && HidD_GetPreparsedData(handle, &mut preparsed) {
                     let status = HidP_GetCaps(preparsed, &mut caps);
                     let _ = HidD_FreePreparsedData(preparsed);
-                    status.0 >= 0 && caps.UsagePage == 0xff13 && caps.Usage == 1
+                    status.0 >= 0 && (caps.UsagePage as u32, caps.Usage as u32) == CONTROL_USAGE
                 } else {
                     false
                 };
                 if !usage
-                    || caps.InputReportByteLength == 0
-                    || caps.InputReportByteLength > 512
-                    || caps.OutputReportByteLength < 62
-                    || caps.OutputReportByteLength > 512
+                    || !control_report_sizes_plausible(
+                        caps.InputReportByteLength as usize,
+                        caps.OutputReportByteLength as usize,
+                    )
                 {
                     let _ = CloseHandle(handle);
                     continue;
