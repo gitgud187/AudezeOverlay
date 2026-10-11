@@ -30,9 +30,13 @@ pub enum Action {
     RestoreCard(usize),
     Record,
     EndRecord,
+    DiscardRecord,
+    NotificationOptions,
     Number(&'static str),
     ResetApp,
     EqMenu,
+    EqProfiles,
+    EqSaveNew,
     EqEditor,
     EqInspect(u8),
     EqUse(u8),
@@ -58,6 +62,8 @@ pub struct View<'a> {
     pub hover: Action,
     pub note: &'a str,
     pub recording: bool,
+    pub notification_options: bool,
+    pub popup_cards: Option<u8>,
     pub recorded_key: Option<(u32, u32)>,
     pub number_edit: Option<&'a audeze_overlay::input::NumberDraft>,
     pub mix: f32,
@@ -79,7 +85,7 @@ pub fn slider(c: &Config, key: &str) -> (f32, f32, f32) {
         "text" => (c.text_scale as f32, 100., 140.),
         "background" => (c.background_opacity as f32, 0., 100.),
         "opacity" => (c.card_opacity as f32, 10., 100.),
-        "rows" => (c.grid_rows as f32, 5., 40.),
+        "blur" => (c.blur_strength as f32, 0., 100.),
         "hold" => (c.duration_ms as f32, 500., 10000.),
         "fade" => (c.fade_ms as f32, 0., 1000.),
         "battery" => (c.low_battery as f32, 0., 50.),
@@ -107,7 +113,7 @@ fn button(
         1.,
         6.,
     );
-    c.text(
+    c.fitted_text(
         label,
         Box2::new(r.x + 6., r.y + (r.h - 18.) / 2., r.w - 12., 24.),
         16.,
@@ -150,6 +156,21 @@ pub fn render(painter: &mut Painter, width: u32, height: u32, scale: f32, v: &Vi
         v.config.background_opacity as f32 / 100.
     };
     c.rect(Box2::new(0., 0., w, h), 0x101010, bg, 8.);
+    if v.popup_cards.is_some() {
+        let cards = card_boxes(v.config, w, h);
+        for (i, r) in cards.iter().copied().enumerate() {
+            if !v.config.cards[i].visible {
+                continue;
+            }
+            c.rect(r, 0x171717, v.config.card_opacity as f32 / 100., 10.);
+            render_card(&mut c, &mut hits, v, i, r);
+        }
+        return Scene {
+            pix: c.pix,
+            hits: Vec::new(),
+            cards,
+        };
+    }
     // Layered windows pass completely transparent pixels through before hit
     // testing. A one-alpha header gives dragging a continuous, invisible target.
     c.rect(Box2::new(16., 14., w - 190., 46.), 0x101010, 1. / 255., 0.);

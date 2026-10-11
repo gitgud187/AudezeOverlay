@@ -1,5 +1,6 @@
 //! HID access, bounded response framing and Maxwell sound protocol mapping.
 use super::command::Command;
+use super::profiles::Profile;
 use crate::model::SoundState;
 use windows::{
     core::PCWSTR,
@@ -12,6 +13,11 @@ use windows::{
 type Result<T> = std::result::Result<T, String>;
 const ANC_MODES: [&str; 3] = ["On", "Transparency", "Off"];
 pub struct Device {
+    pub profile: Profile,
+    /// Matching wired USB identity present, even if firmware exposes controls
+    /// only through the dongle while both connections are attached.
+    pub usb_cable: bool,
+    sidetone_max: Option<u8>,
     path: Vec<u16>,
     input_len: usize,
     output_len: usize,
@@ -40,6 +46,7 @@ pub enum Query {
     EqBands,
     EqWriteAck,
     EqSelectAck,
+    MaxSidetone,
 }
 /// An incomplete frame holds at most 191 bytes; the next report adds at most 61.
 /// Even at the six-byte minimum frame size, 64 slots cover that bounded input.
@@ -111,6 +118,8 @@ impl Device {
             )
             .map_err(|e| e.to_string())?;
             let result = (|| {
+                let mut selected: Option<Self> = None;
+                let mut wired_profiles = Vec::new();
                 for index in 0..256 {
                     let mut iface = SP_DEVICE_INTERFACE_DATA {
                         cbSize: std::mem::size_of::<SP_DEVICE_INTERFACE_DATA>() as u32,
@@ -149,10 +158,22 @@ impl Device {
                     }
                     let path = PCWSTR((*detail).DevicePath.as_ptr());
                     let path_text = path.to_string().unwrap_or_default().to_ascii_lowercase();
-                    if !path_text.contains("vid_3329&pid_4ba9") || !path_text.contains("col02") {
+                    if !path_text.contains("vid_3329&pid_") {
                         continue;
                     }
-                    let handle = CreateFileW(
+                    if let Some(profile) = path_text
+                        .split("vid_3329&pid_")
+                        .nth(1)
+                        .and_then(|s| s.get(..4))
+                        .and_then(|s| u16::from_str_radix(s, 16).ok())
+                        .and_then(|pid| Profile::from_usb(0x3329, pid))
+                        .filter(|p| p.connection == crate::model::Connection::WiredUsb)
+                    {
+                        if !wired_profiles.contains(&profile) {
+                            wired_profiles.push(profile);
+                        }
+                    }
+                    let handle = match CreateFileW(
                         path,
                         GENERIC_READ.0 | GENERIC_WRITE.0,
                         FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -160,17 +181,25 @@ impl Device {
                         OPEN_EXISTING,
                         FILE_ATTRIBUTE_NORMAL,
                         None,
-                    )
-                    .map_err(|e| e.to_string())?;
+                    ) {
+                        Ok(handle) => handle,
+                        // Other collections (for example consumer controls) may
+                        // be exclusively held by Windows. Continue to the vendor
+                        // interface; never let an inaccessible sibling hide it.
+                        Err(_) => continue,
+                    };
                     let mut attrs = HIDD_ATTRIBUTES {
                         Size: std::mem::size_of::<HIDD_ATTRIBUTES>() as u32,
                         ..Default::default()
                     };
                     let mut preparsed = PHIDP_PREPARSED_DATA::default();
                     let mut caps = HIDP_CAPS::default();
-                    let identity = HidD_GetAttributes(handle, &mut attrs)
-                        && attrs.VendorID == 0x3329
-                        && attrs.ProductID == 0x4ba9;
+                    let profile = if HidD_GetAttributes(handle, &mut attrs) {
+                        Profile::from_usb(attrs.VendorID, attrs.ProductID)
+                    } else {
+                        None
+                    };
+                    let identity = profile.is_some();
                     let usage = if identity && HidD_GetPreparsedData(handle, &mut preparsed) {
                         let status = HidP_GetCaps(preparsed, &mut caps);
                         let _ = HidD_FreePreparsedData(preparsed);
@@ -187,7 +216,14 @@ impl Device {
                         let _ = CloseHandle(handle);
                         continue;
                     }
-                    return Ok(Self {
+                    let Some(profile) = profile else {
+                        let _ = CloseHandle(handle);
+                        continue;
+                    };
+                    let candidate = Self {
+                        profile,
+                        usb_cable: false,
+                        sidetone_max: profile.verified().then_some(31),
                         path: path_text.encode_utf16().chain(Some(0)).collect(),
                         input_len: caps.InputReportByteLength as usize,
                         reader: handle,
@@ -195,12 +231,48 @@ impl Device {
                         stream: Vec::with_capacity(256),
                         eq_slot: 6,
                         eq_read_slot: None,
-                    });
+                    };
+                    if let Some(old) = &selected {
+                        if old.profile.family != profile.family || old.profile.xbox != profile.xbox
+                        {
+                            return Err("Multiple headset models connected. Connect one headset to choose its controls.".into());
+                        }
+                        if old.profile.connection == profile.connection {
+                            return Err("Multiple matching headset interfaces. Connect one headset at a time.".into());
+                        }
+                        if profile.connection == crate::model::Connection::WirelessDongle {
+                            continue;
+                        }
+                    }
+                    selected = Some(candidate);
                 }
-                Err("Connect the Maxwell 2 ANC USB dongle.".into())
+                let mut selected = selected.ok_or_else(|| {
+                    "Connect a supported Maxwell headset or USB dongle.".to_owned()
+                })?;
+                selected.usb_cable = wired_profiles.iter().any(|p| {
+                    p.family == selected.profile.family && p.xbox == selected.profile.xbox
+                });
+                Ok(selected)
             })();
             let _ = SetupDiDestroyDeviceInfoList(list);
             result
+        }
+    }
+    pub fn same_endpoint(&self, other: &Self) -> bool {
+        self.path == other.path && self.usb_cable == other.usb_cable
+    }
+    pub fn initial_state(&self) -> SoundState {
+        SoundState {
+            usb_cable: self.usb_cable,
+            family: Some(self.profile.family),
+            transport: Some(self.profile.connection),
+            capabilities: Some(self.profile.capabilities()),
+            experimental_device: !self.profile.verified(),
+            xbox: self.profile.xbox,
+            sidetone_max: self.sidetone_max,
+            device: Some(self.profile.family.name().into()),
+            connection: Some(self.profile.connection.label().into()),
+            ..Default::default()
         }
     }
     pub fn listen(&self) -> Result<crate::hid_listener::InputListener> {
@@ -211,7 +283,7 @@ impl Device {
         let bytes = &mut storage[..self.output_len];
         bytes[0] = 6;
         bytes[1] = body.len() as u8;
-        bytes[2] = 0x80;
+        bytes[2] = self.profile.route();
         bytes[3..3 + body.len()].copy_from_slice(body);
         let mut written = 0;
         unsafe { WriteFile(self.reader, Some(bytes), Some(&mut written), None) }
@@ -222,9 +294,13 @@ impl Device {
         Ok(())
     }
     pub fn query(&mut self, q: Query) -> Result<()> {
+        if !self.profile.supports_query(q) {
+            return Err("This query is unavailable for this headset model.".into());
+        }
         self.eq_read_slot = (q == Query::EqBands).then_some(self.eq_slot);
         self.packet(match q {
             Query::EqWriteAck | Query::EqSelectAck => return Ok(()),
+            Query::EqIndex if !self.profile.capabilities().anc => &[5, 0x5a, 4, 0, 1, 9, 0, 0],
             Query::EqIndex => &[5, 0x5a, 3, 0, 0x30, 0x2e, 0x0d],
             Query::EqBands => {
                 return self.packet(&[5, 0x5a, 5, 0, 0x30, 0x2e, 0x32, self.eq_slot, 10])
@@ -232,6 +308,7 @@ impl Device {
             Query::Mix => &[5, 0x5a, 4, 0, 0x83, 0x2c, 0x0b, 0],
             Query::Side => &[5, 0x5a, 4, 0, 0x83, 0x2c, 7, 0],
             Query::Level => &[5, 0x5a, 4, 0, 1, 9, 0x2c, 0],
+            Query::MaxSidetone => &[5, 0x5a, 4, 0, 1, 9, 0x2d, 0],
             Query::Noise => &[5, 0x5a, 4, 0, 1, 9, 0x24, 0],
             Query::Mute => &[5, 0x5a, 4, 0, 1, 9, 0x22, 0],
             Query::Anc => &[5, 0x5a, 3, 0, 0x30, 0x2e, 2],
@@ -239,6 +316,9 @@ impl Device {
         })
     }
     pub fn set(&mut self, c: &Command) -> Result<Query> {
+        if !self.profile.supports_command(c) {
+            return Err("This control is unavailable for this headset model.".into());
+        }
         match c {
             Command::EqLoad(slot) if (6..=9).contains(slot) => {
                 self.eq_slot = *slot;
@@ -253,6 +333,10 @@ impl Device {
             _ => (),
         }
         let (q, body) = match c {
+            Command::EqSelect(slot) if *slot < 10 && !self.profile.capabilities().anc => (
+                Query::EqSelectAck,
+                vec![5, 0x5a, 5, 0, 0, 9, 0, 0, *slot + 1],
+            ),
             Command::EqSelect(slot) if *slot < 10 => (
                 Query::EqSelectAck,
                 vec![5, 0x5a, 4, 0, 0x30, 0x2e, 0x0c, *slot],
@@ -286,7 +370,13 @@ impl Device {
                     9,
                     0x2c,
                     0,
-                    (*p as f32 * 31. / 100.).round() as u8,
+                    (*p as f32
+                        * self
+                            .sidetone_max
+                            .ok_or("Sidetone range is not available yet")?
+                            as f32
+                        / 100.)
+                        .round() as u8,
                 ],
             ),
             Command::Anc(s) => {
@@ -331,14 +421,25 @@ impl Device {
         state: &mut SoundState,
         mut observed: impl FnMut(&[u8], Option<Query>, &SoundState),
     ) -> QueryUpdates {
+        if bytes.get(2) != Some(&self.profile.route()) {
+            return QueryUpdates::default();
+        }
+        // Diagnostics can start with an empty snapshot too. Never decode a
+        // wired frame using a default wireless route or a guessed level scale.
+        state.family = Some(self.profile.family);
+        state.transport = Some(self.profile.connection);
+        state.capabilities = Some(self.profile.capabilities());
+        state.sidetone_max = self.sidetone_max;
         let slot = self.eq_read_slot;
-        consume_report_bytes_with_slot(
+        let updates = consume_report_bytes_with_slot(
             &mut self.stream,
             bytes,
             state,
             |frame, field, state| observed(frame, field, state),
             slot,
-        )
+        );
+        self.sidetone_max = state.sidetone_max;
+        updates
     }
 }
 fn consume_report_bytes_with_slot(
@@ -351,7 +452,12 @@ fn consume_report_bytes_with_slot(
     if bytes.len() < 3 || bytes[1] as usize > bytes.len() - 3 {
         return QueryUpdates::default();
     }
-    if bytes[0] != 7 || bytes[1] > 61 || bytes[2] != 0x80 {
+    let route = if state.transport == Some(crate::model::Connection::WiredUsb) {
+        0
+    } else {
+        0x80
+    };
+    if bytes[0] != 7 || bytes[1] > 61 || bytes[2] != route {
         return QueryUpdates::default();
     }
     stream.extend_from_slice(&bytes[3..3 + bytes[1] as usize]);
@@ -409,7 +515,17 @@ pub fn parse_frame(b: &[u8], s: &mut SoundState) -> Option<Query> {
     {
         return None;
     }
+    if (b[4], b[5]) == (0x30, 0x2e) && s.capabilities.is_some_and(|caps| !caps.anc) {
+        return None;
+    }
     let q = match (b[4], b[5]) {
+        (0, 9)
+            if b.len() == 9
+                && b[6..] == [0, 0, 0]
+                && s.capabilities.is_some_and(|caps| !caps.anc) =>
+        {
+            Query::EqSelectAck
+        }
         (0x83, 0x2c) if b.len() == 10 && b[6] == 0 && b[8] == 0 => match b[7] {
             0x0b if b[9] <= 20 => {
                 let chat = b[9] * 5;
@@ -423,8 +539,18 @@ pub fn parse_frame(b: &[u8], s: &mut SoundState) -> Option<Query> {
             _ => return None,
         },
         (1, 9) if b.len() == 10 && b[7] == 0 && b[8] == 0 => match b[6] {
-            0x2c if b[9] <= 31 => {
-                s.sidetone_level = Some((b[9] as f32 * 100. / 31.).round() as u8);
+            0 if (1..=10).contains(&b[9]) && s.capabilities.is_some_and(|caps| !caps.anc) => {
+                s.eq_index = Some(b[9] - 1);
+                Query::EqIndex
+            }
+            0x2d if b[9] > 0 => {
+                s.sidetone_max = Some(b[9]);
+                Query::MaxSidetone
+            }
+            0x2c if s.sidetone_max.is_some_and(|max| b[9] <= max) => {
+                s.sidetone_level = s
+                    .sidetone_max
+                    .map(|max| (b[9] as f32 * 100. / max as f32).round() as u8);
                 Query::Level
             }
             0x24 if b[9] <= 2 => {
@@ -471,6 +597,56 @@ fn consume_report_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn wired_frames_reject_wireless_routing_and_use_the_reported_sidetone_range() {
+        let mut state = SoundState {
+            transport: Some(crate::model::Connection::WiredUsb),
+            ..Default::default()
+        };
+        let mut stream = vec![];
+        let mut report = vec![7, 10, 0x80, 5, 0x5b, 6, 0, 1, 9, 0x2d, 0, 0, 40];
+        assert!(consume_report_bytes(&mut stream, &report, &mut state, |_, _, _| {}).is_empty());
+        report[2] = 0;
+        assert!(
+            consume_report_bytes(&mut stream, &report, &mut state, |_, _, _| {})
+                .contains(&Query::MaxSidetone)
+        );
+        assert_eq!(
+            parse_frame(&[5, 0x5b, 6, 0, 1, 9, 0x2c, 0, 0, 20], &mut state),
+            Some(Query::Level)
+        );
+        assert_eq!(state.sidetone_level, Some(50));
+        assert_eq!(
+            parse_frame(&[5, 0x5b, 6, 0, 1, 9, 0x2c, 0, 0, 41], &mut state),
+            None
+        );
+    }
+    #[test]
+    fn legacy_eq_selection_is_one_based_and_never_parsed_as_anc() {
+        let mut state = SoundState {
+            capabilities: Some(crate::model::Capabilities {
+                anc: false,
+                eq_edit: false,
+            }),
+            ..Default::default()
+        };
+        for raw in 1..=10 {
+            assert_eq!(
+                parse_frame(&[5, 0x5b, 6, 0, 1, 9, 0, 0, 0, raw], &mut state),
+                Some(Query::EqIndex)
+            );
+            assert_eq!(state.eq_index, Some(raw - 1));
+        }
+        assert_eq!(
+            parse_frame(&[5, 0x5b, 5, 0, 0, 9, 0, 0, 0], &mut state),
+            Some(Query::EqSelectAck)
+        );
+        state.capabilities.as_mut().unwrap().anc = true;
+        assert_eq!(
+            parse_frame(&[5, 0x5b, 6, 0, 1, 9, 0, 0, 0, 7], &mut state),
+            None
+        );
+    }
     #[test]
     fn eq_read_frames_use_q_before_gain_and_survive_fragmentation() {
         let mut expected = crate::eq::sample(8);

@@ -7,6 +7,17 @@ pub(super) unsafe fn drag(app: &mut App, x: f32, y: f32) {
         Drag::Setting(key) => set_slider(app, key, x),
         Drag::Mix => {
             let r = app.cards[0];
+            if app.config.minimal_cards[0] || r.h < 190. {
+                if let Some(hit) = app.hits.iter().find(|h| h.action == Action::Mix) {
+                    set_mix(
+                        app,
+                        ((x - hit.rect.x) / hit.rect.w * 100.)
+                            .round()
+                            .clamp(0., 100.) as u8,
+                    );
+                }
+                return;
+            }
             let (cx, cy) = (r.x + r.w / 2., r.y + 54. + (r.h - 90.) / 2.);
             set_mix(app, mix_from_point(x - cx, y - cy));
         }
@@ -39,8 +50,25 @@ pub(super) unsafe fn drag(app: &mut App, x: f32, y: f32) {
             }
             if resize {
                 let mut cards = original_cards;
-                if layout::resize_in(&mut cards, index, p, cols, rows) {
+                // Respect the work area's size, but make room without a separate window resize.
+                let work = monitor_rect(app);
+                let scale = GetDpiForWindow(app.hwnd).max(96) as f32 / 96.;
+                let max_cols =
+                    (((work.right - work.left) as f32 / scale - 24.) / cw).floor() as i32;
+                let max_rows = (((work.bottom - work.top) as f32 / scale
+                    - app.config.vertical_padding())
+                    / ch)
+                    .floor() as i32;
+                if layout::resize_pushing(
+                    &mut cards,
+                    index,
+                    p,
+                    max_cols.max(cols),
+                    max_rows.max(rows),
+                ) {
                     app.config.cards = cards;
+                    app.config.fit_layout();
+                    position(app);
                 }
             } else {
                 let pointer = ((x - 12.) / cw, (y - app.config.card_top()) / ch);
@@ -134,6 +162,24 @@ pub(super) unsafe fn card_menu(app: &mut App, index: Option<usize>) {
     let Ok(menu) = CreatePopupMenu() else { return };
     if let Some(i) = index {
         let _ = AppendMenuW(menu, MF_STRING, i + 1, w!("Remove card"));
+        if i == 0 {
+            let flags = MF_STRING
+                | if app.config.minimal_cards[i] {
+                    MF_CHECKED
+                } else {
+                    MF_UNCHECKED
+                };
+            let _ = AppendMenuW(menu, flags, 20, w!("Minimal mode — slider"));
+        }
+        if i == 5 {
+            let flags = MF_STRING
+                | if app.config.inline_eq {
+                    MF_CHECKED
+                } else {
+                    MF_UNCHECKED
+                };
+            let _ = AppendMenuW(menu, flags, 21, w!("Mini EQ editor when there is room"));
+        }
     } else {
         let mut any = false;
         for (i, card) in app.config.cards.iter().enumerate() {
@@ -173,7 +219,29 @@ pub(super) unsafe fn card_menu(app: &mut App, index: Option<usize>) {
     )
     .0;
     let _ = DestroyMenu(menu);
-    if id == 7 {
+    if id == 20 {
+        app.config.minimal_cards[0] = !app.config.minimal_cards[0];
+        let mut proposed = app.config.cards[0];
+        proposed.h = if app.config.minimal_cards[0] { 3 } else { 8 };
+        layout::resize_pushing(
+            &mut app.config.cards,
+            0,
+            proposed,
+            app.config.grid_columns,
+            80,
+        );
+        app.config.trim_canvas();
+        position(app);
+        save(app);
+        request_draw(app);
+    } else if id == 21 {
+        app.config.inline_eq = !app.config.inline_eq;
+        if app.config.inline_eq {
+            open_eq(app);
+        }
+        save(app);
+        request_draw(app);
+    } else if id == 7 {
         setting(app, "status-icons", 0);
         app.config.fit_layout();
         save(app);

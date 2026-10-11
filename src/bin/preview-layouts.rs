@@ -14,6 +14,7 @@ use draw::Painter;
 fn main() {
     std::fs::create_dir_all("diagnostics").expect("diagnostics directory");
     let mut painter = Painter::new();
+    showcase();
     let sound = SoundState {
         mix_revision: 0,
         eq_index: Some(0),
@@ -30,6 +31,13 @@ fn main() {
         device: Some("Maxwell 2 ANC".into()),
         connection: Some("USB Dongle".into()),
         status: String::new(),
+        family: Some(audeze_overlay::model::HeadsetFamily::Maxwell2Anc),
+        transport: Some(audeze_overlay::model::Connection::WirelessDongle),
+        capabilities: Some(audeze_overlay::model::Capabilities {
+            anc: true,
+            eq_edit: true,
+        }),
+        ..Default::default()
     };
     let base = Config {
         width: 520,
@@ -110,6 +118,8 @@ fn main() {
             note: "",
             recording: false,
             recorded_key: None,
+            notification_options: false,
+            popup_cards: None,
             number_edit: None,
             mix: 50.,
             demo: false,
@@ -155,11 +165,155 @@ fn main() {
         println!("{path}: ANC bounds and nonoverlap verified");
     }
     let config = Config::default();
+    for (name, transport, cable) in [
+        (
+            "wireless-charging",
+            audeze_overlay::model::Connection::WirelessDongle,
+            true,
+        ),
+        (
+            "wired-power",
+            audeze_overlay::model::Connection::WiredUsb,
+            true,
+        ),
+        (
+            "bluetooth-status",
+            audeze_overlay::model::Connection::Bluetooth,
+            false,
+        ),
+    ] {
+        let status_config = Config {
+            status_icons: true,
+            ..Config::default()
+        };
+        let mut state = sound.clone();
+        state.transport = Some(transport);
+        state.usb_cable = cable;
+        if transport == audeze_overlay::model::Connection::Bluetooth {
+            state.mix = None;
+            state.battery = None;
+            state.muted = None;
+        }
+        let view = View {
+            config: &status_config,
+            sound: &state,
+            eq_editor: None,
+            settings: None,
+            edit: false,
+            hover: Action::None,
+            note: "",
+            recording: false,
+            notification_options: false,
+            popup_cards: None,
+            recorded_key: None,
+            number_edit: None,
+            mix: 50.,
+            demo: false,
+            monitor_label: "Automatic",
+            drag_preview: None,
+            animation: None,
+        };
+        dashboard::render(
+            &mut painter,
+            status_config.width,
+            status_config.height,
+            1.,
+            &view,
+        )
+        .pix
+        .save_png(format!("diagnostics/layout-{name}.png"))
+        .unwrap();
+    }
     let mut eq_editor = audeze_overlay::eq::Editor {
         selected: 6,
         ..Default::default()
     };
     eq_editor.receive(audeze_overlay::eq::sample(6), 0);
+    let mut minimal = Config {
+        status_icons: true,
+        ..Config::default()
+    };
+    for card in &mut minimal.cards {
+        card.visible = false;
+    }
+    minimal.cards[0] = layout::Card {
+        x: 0,
+        y: 0,
+        w: 5,
+        h: 3,
+        visible: true,
+    };
+    minimal.minimal_cards[0] = true;
+    minimal.trim_canvas();
+    let mut inline = Config {
+        inline_eq: true,
+        ..Config::default()
+    };
+    for card in &mut inline.cards {
+        card.visible = false;
+    }
+    inline.cards[5] = layout::Card {
+        x: 0,
+        y: 0,
+        w: 7,
+        h: 10,
+        visible: true,
+    };
+    inline.trim_canvas();
+    let popup = config.notification_layout(1);
+    let mut inline_sound = sound.clone();
+    inline_sound.eq_index = Some(6);
+    for (name, config) in [
+        ("minimal", minimal),
+        ("inline-eq", inline),
+        ("changed-popup", popup),
+    ] {
+        for scale in [1., 1.5, 2.] {
+            let view = View {
+                config: &config,
+                sound: &inline_sound,
+                eq_editor: Some(&eq_editor),
+                settings: None,
+                edit: false,
+                hover: Action::None,
+                note: "",
+                recording: false,
+                recorded_key: None,
+                notification_options: false,
+                popup_cards: config.popup.then_some(1),
+                number_edit: None,
+                mix: 50.,
+                demo: false,
+                monitor_label: "Auto",
+                drag_preview: None,
+                animation: None,
+            };
+            let scene = dashboard::render(
+                &mut painter,
+                (config.width as f32 * scale) as u32,
+                (config.height as f32 * scale) as u32,
+                scale,
+                &view,
+            );
+            if name == "inline-eq" {
+                assert_eq!(
+                    scene
+                        .hits
+                        .iter()
+                        .filter(|h| matches!(h.action, Action::EqBand(_)))
+                        .count(),
+                    10
+                );
+            }
+            if config.popup {
+                assert!(scene.hits.is_empty());
+            }
+            scene
+                .pix
+                .save_png(format!("diagnostics/layout-{name}-{scale}.png"))
+                .unwrap();
+        }
+    }
     let draft = audeze_overlay::input::NumberDraft::new("hold", 797);
     for (name, section) in [
         ("equalizer", Some(5)),
@@ -179,6 +333,8 @@ fn main() {
             note: "",
             recording: section == Some(3),
             recorded_key: Some((2, 0x24)),
+            notification_options: true,
+            popup_cards: None,
             number_edit: if section == Some(2) {
                 Some(&draft)
             } else {
@@ -227,6 +383,8 @@ fn main() {
             note: "",
             recording: false,
             recorded_key: None,
+            notification_options: false,
+            popup_cards: None,
             number_edit: None,
             mix: 80.,
             demo: false,
@@ -241,5 +399,142 @@ fn main() {
         if millis == 300 {
             assert!(!frame.active, "Animations must stop when idle");
         }
+    }
+}
+
+/// Reproducible documentation views, using public fonts and sample readings.
+/// The neutral backdrop exposes opacity differences; Windows owns live blur.
+fn showcase() {
+    use tiny_skia::{
+        Color, GradientStop, LinearGradient, Paint, Pixmap, Point, SpreadMode, Transform,
+    };
+
+    let mut painter = Painter::new();
+    painter.fonts = ["segoeui.ttf", "seguisb.ttf"].map(|name| {
+        fontdue::Font::from_bytes(
+            std::fs::read(format!(r"C:\Windows\Fonts\{name}")).expect("public Windows font"),
+            fontdue::FontSettings::default(),
+        )
+        .expect("valid public font")
+    });
+    let mut vertical = Config {
+        background_opacity: 50,
+        card_opacity: 10,
+        blur_strength: 50,
+        status_icons: true,
+        cell_width: 596. / 12.,
+        cell_height: 28.,
+        ..Config::default()
+    };
+    vertical.eq.names[0] = "WickedCushions".into();
+    let mut y = 0;
+    for (index, height) in [(0, 12), (2, 4), (5, 4), (1, 4), (3, 4), (4, 3)] {
+        vertical.cards[index] = layout::Card {
+            x: 0,
+            y,
+            w: 5,
+            h: height,
+            visible: true,
+        };
+        y += height;
+    }
+    vertical.trim_canvas();
+    let mut stacked = Config {
+        status_icons: true,
+        ..Config::default()
+    };
+    stacked.trim_canvas();
+    let sound = SoundState {
+        mix: Some((20, 80)),
+        sidetone: Some(false),
+        sidetone_level: Some(35),
+        anc: Some("On".into()),
+        noise: Some("Off".into()),
+        battery: Some(86),
+        muted: Some(true),
+        device: Some("Maxwell 2 ANC".into()),
+        connection: Some("Wireless dongle".into()),
+        family: Some(audeze_overlay::model::HeadsetFamily::Maxwell2Anc),
+        transport: Some(audeze_overlay::model::Connection::WirelessDongle),
+        capabilities: Some(audeze_overlay::model::Capabilities {
+            anc: true,
+            eq_edit: true,
+        }),
+        eq_index: Some(6),
+        ..Default::default()
+    };
+    let mut editor = audeze_overlay::eq::Editor {
+        selected: 6,
+        ..Default::default()
+    };
+    editor.receive(audeze_overlay::eq::sample(6), 0);
+    for (name, config, settings, edit) in [
+        ("vertical", vertical, None, false),
+        ("stacked", stacked.clone(), None, false),
+        ("layout", stacked.clone(), None, true),
+        ("appearance", stacked.clone(), Some(0), false),
+        ("equalizer", stacked, Some(5), false),
+    ] {
+        let view = View {
+            config: &config,
+            sound: &sound,
+            eq_editor: Some(&editor),
+            settings,
+            edit,
+            hover: Action::None,
+            note: "",
+            recording: false,
+            notification_options: false,
+            popup_cards: None,
+            recorded_key: None,
+            number_edit: None,
+            mix: 80.,
+            demo: false,
+            monitor_label: "Automatic",
+            drag_preview: None,
+            animation: None,
+        };
+        let scale = 2.;
+        let (width, height) = if settings.is_some() {
+            (900, 750)
+        } else {
+            (config.width, config.height)
+        };
+        let scene = dashboard::render(&mut painter, width * 2, height * 2, scale, &view);
+        let mut backdrop =
+            Pixmap::new(scene.pix.width(), scene.pix.height()).expect("showcase dimensions");
+        let paint = Paint {
+            shader: LinearGradient::new(
+                Point::from_xy(0., 0.),
+                Point::from_xy(backdrop.width() as f32, backdrop.height() as f32),
+                vec![
+                    GradientStop::new(0., Color::from_rgba8(86, 110, 123, 255)),
+                    GradientStop::new(0.5, Color::from_rgba8(49, 64, 74, 255)),
+                    GradientStop::new(1., Color::from_rgba8(91, 79, 100, 255)),
+                ],
+                SpreadMode::Pad,
+                Transform::identity(),
+            )
+            .expect("nonzero gradient"),
+            ..Paint::default()
+        };
+        backdrop.fill_rect(
+            tiny_skia::Rect::from_xywh(0., 0., backdrop.width() as f32, backdrop.height() as f32)
+                .unwrap(),
+            &paint,
+            Transform::identity(),
+            None,
+        );
+        backdrop.draw_pixmap(
+            0,
+            0,
+            scene.pix.as_ref(),
+            &Default::default(),
+            Transform::identity(),
+            None,
+        );
+        backdrop
+            .save_png(format!("diagnostics/layout-showcase-{name}.png"))
+            .expect("save showcase");
     }
 }

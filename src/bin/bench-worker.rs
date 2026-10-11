@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ready = {
             let s = state.lock().unwrap();
             s.mix.is_some()
-                && s.anc.is_some()
+                && (s.capabilities.is_some_and(|caps| !caps.anc) || s.anc.is_some())
                 && s.noise.is_some()
                 && s.battery.is_some()
                 && s.muted.is_some()

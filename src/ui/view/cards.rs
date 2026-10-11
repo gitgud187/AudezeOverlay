@@ -2,11 +2,11 @@
 use super::*;
 pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usize, r: Box2) {
     let fs = v.config.text_scale as f32 / 100.;
-    let short = i != 0 && r.h < 110.;
+    let short = r.h < 110.;
     let pad = if short { 8. } else { 16. };
     let inner = r.inset(pad);
     let mut label = if short { 16. * fs } else { 18. * fs };
-    let label_width = inner.w - if v.edit { 28. } else { 0. };
+    let label_width = inner.w - if v.edit { 28. } else { 0. } - if i == 1 { 60. } else { 0. };
     while label > 14. {
         let px = (label * c.scale).round().max(1.);
         let measured: f32 = layout::NAMES[i]
@@ -24,7 +24,7 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
             Box2::new(
                 inner.x + if v.edit { 28. } else { 0. },
                 inner.y,
-                inner.w - if v.edit { 28. } else { 0. },
+                label_width,
                 30.,
             ),
             label,
@@ -33,8 +33,49 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
             i == 0,
         );
     }
+    if i == 2 && v.sound.capabilities.is_some_and(|caps| !caps.anc) {
+        c.fitted_text(
+            "Not available on this model",
+            Box2::new(inner.x, inner.y + 28., inner.w, 28.),
+            14.,
+            SUB,
+            false,
+            false,
+        );
+        return;
+    }
     match i {
         0 => {
+            if v.config.minimal_cards[0] || r.h < 190. {
+                let y = r.y + r.h - 14.;
+                let bounds = Box2::new(inner.x + 6., y - 12., inner.w - 12., 24.);
+                c.line(&[(bounds.x, y), (bounds.x + bounds.w, y)], 0x555555, 1., 4.);
+                if let Some((game, chat)) = v.sound.mix {
+                    c.circle(bounds.x + bounds.w * chat as f32 / 100., y, 6., FG, 1.);
+                    c.fitted_text(
+                        &format!("Game {game} / {chat} Chat"),
+                        Box2::new(inner.x, inner.y + 23., inner.w, 20.),
+                        16. * fs,
+                        FG,
+                        true,
+                        true,
+                    );
+                    hits.push(Hit {
+                        rect: bounds,
+                        action: Action::Mix,
+                    });
+                } else {
+                    c.fitted_text(
+                        "Mix unavailable",
+                        Box2::new(inner.x, inner.y + 23., inner.w, 20.),
+                        14.,
+                        SUB,
+                        false,
+                        true,
+                    );
+                }
+                return;
+            }
             let mut radius = ((r.w - 52.) / 2.).min((r.h - 112.) / 2.).max(32.);
             if radius < 65. {
                 // Compact cards need the space previously reserved for the
@@ -47,59 +88,46 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
             c.arc(cx, cy, radius - 12., 0., 360., 0x393939, 1., 1.5);
             let grip = v.animation.map(|frame| frame.grip).unwrap_or(0.);
             let active_radius = radius + grip * 2.;
-            c.arc(
-                cx,
-                cy,
-                active_radius,
-                135.,
-                135. + v.mix * 2.7,
-                0xd6d6d6,
-                1.,
-                5. + grip * 2.5,
-            );
-            let a = (135. + v.mix * 2.7).to_radians();
-            c.circle(
-                cx + active_radius * a.cos(),
-                cy + active_radius * a.sin(),
-                5. + grip,
-                FG,
-                1.,
-            );
+            if v.sound.mix.is_some() {
+                c.arc(
+                    cx,
+                    cy,
+                    active_radius,
+                    135.,
+                    135. + v.mix * 2.7,
+                    0xd6d6d6,
+                    1.,
+                    5. + grip * 2.5,
+                );
+                let a = (135. + v.mix * 2.7).to_radians();
+                c.circle(
+                    cx + active_radius * a.cos(),
+                    cy + active_radius * a.sin(),
+                    5. + grip,
+                    FG,
+                    1.,
+                );
+            }
             let value = v
                 .sound
                 .mix
                 .map(|(g, chat)| format!("{g} / {chat}"))
                 .unwrap_or_else(|| "— / —".into());
-            let text_width = if compact {
-                (radius - 14.) * 2.
-            } else {
-                radius * 2.
-            };
-            let mut value_size = (34. * fs).min(radius * 0.55).max(22.);
-            let value_width = |size: f32| {
-                let px = (size * c.scale).round().max(1.);
-                value
-                    .chars()
-                    .map(|ch| c.painter.fonts[1].metrics(ch, px).advance_width)
-                    .sum::<f32>()
-                    / c.scale
-            };
-            while value_size > 22. && value_width(value_size) > text_width - 0.5 {
-                value_size = (value_size - 1.).max(22.);
-            }
-            let text_width = text_width.max(value_width(value_size) + 0.5);
+            // Keep every digit inside the inner ring, including 100 / 0.
+            let text_width = (radius - 18.).max(16.) * 2.;
+            let value_size = (34. * fs).min(radius * 0.6).max(12.);
             let value_rect = Box2::new(
                 cx - text_width / 2.,
-                cy - if compact { 14. } else { 26. },
+                cy - if compact { 20. } else { 28. },
                 text_width,
-                50.,
+                40.,
             );
             let transition = v.animation.map(|f| f.number_progress).unwrap_or(1.);
             if let Some(current) = v.sound.mix {
                 let previous = v.animation.and_then(|f| f.previous_mix).unwrap_or(current);
                 odometer(c, value_rect, value_size, previous, current, transition);
             } else {
-                c.text(&value, value_rect, value_size, FG, true, true);
+                c.fitted_text(&value, value_rect, value_size, FG, true, true);
             }
             if !compact {
                 c.text(
@@ -132,15 +160,17 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
                 false,
                 false,
             );
-            hits.push(Hit {
-                rect: Box2::new(
-                    cx - radius - 10.,
-                    cy - radius - 10.,
-                    radius * 2. + 20.,
-                    radius * 2. + 20.,
-                ),
-                action: Action::Mix,
-            });
+            if v.sound.mix.is_some() {
+                hits.push(Hit {
+                    rect: Box2::new(
+                        cx - radius - 10.,
+                        cy - radius - 10.,
+                        radius * 2. + 20.,
+                        radius * 2. + 20.,
+                    ),
+                    action: Action::Mix,
+                });
+            }
         }
         1 => {
             switch(
@@ -160,10 +190,15 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
                 .sidetone_level
                 .map(|n| format!("Level {n}%"))
                 .unwrap_or_else(|| "Level —".into());
-            c.text(
+            c.fitted_text(
                 &value,
-                Box2::new(inner.x, r.y + if short { 33. } else { 49. }, inner.w, 25.),
-                16. * fs,
+                Box2::new(
+                    inner.x,
+                    r.y + if short { 29. } else { 49. },
+                    inner.w,
+                    if short { 20. } else { 25. },
+                ),
+                (16. * fs).min(if short { 16. } else { 24. }),
                 SUB,
                 false,
                 false,
@@ -298,7 +333,7 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
                     rect.w - padding * 2.,
                     24.,
                 );
-                c.text(l, label_bounds, font_size, FG, true, true);
+                c.fitted_text(l, label_bounds, font_size, FG, true, true);
                 if weight > 0. {
                     c.text_clipped(l, label_bounds, font_size, 0x151515, true, true, fill);
                 }
@@ -307,11 +342,15 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
         }
         4 => {
             let status = v.sound.device.as_deref().unwrap_or("Headset disconnected");
-            let battery = v
-                .sound
-                .battery
-                .map(|b| format!("{b}% battery"))
-                .unwrap_or_else(|| "Battery —".into());
+            let battery = format!(
+                "{} battery{}",
+                v.sound.battery_label(),
+                if v.sound.usb_cable {
+                    " · USB power"
+                } else {
+                    ""
+                }
+            );
             let mute = match v.sound.muted {
                 Some(true) => "Mic muted",
                 Some(false) => "Mic live",
@@ -333,7 +372,7 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
                     false,
                 );
                 c.text(
-                    "USB Dongle",
+                    v.sound.connection.as_deref().unwrap_or("Disconnected"),
                     Box2::new(inner.x + inner.w * 0.4, inner.y, inner.w * 0.26, 28.),
                     16. * fs,
                     SUB,
@@ -416,18 +455,44 @@ pub(super) fn status_icons(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, width:
     let step = (row.w / 3.).min(112.);
     let y = 112.;
     let x = row.x + 6.;
-    c.line(&[(x, y + 6.), (x, y - 7.), (x - 4., y - 3.)], ink, 1., 1.5);
-    c.line(&[(x, y - 7.), (x + 4., y - 3.)], ink, 1., 1.5);
-    c.line(
-        &[(x, y + 2.), (x + 6., y - 1.), (x + 6., y - 4.)],
-        ink,
-        1.,
-        1.5,
-    );
-    c.circle(x, y + 6., 2., ink, 1.);
-    c.text(
-        if v.sound.mix.is_some() {
-            "USB"
+    if v.sound.transport == Some(audeze_overlay::model::Connection::Bluetooth) {
+        c.line(
+            &[
+                (x - 5., y - 5.),
+                (x + 5., y + 4.),
+                (x, y + 9.),
+                (x, y - 9.),
+                (x + 5., y - 4.),
+                (x - 5., y + 5.),
+            ],
+            ink,
+            1.,
+            1.5,
+        );
+    } else if v.sound.transport == Some(audeze_overlay::model::Connection::WirelessDongle) {
+        c.arc(x + 1., y + 5., 12., 225., 315., ink, 1., 1.5);
+        c.arc(x + 1., y + 5., 7., 225., 315., ink, 1., 1.5);
+        c.circle(x + 1., y + 3., 2., ink, 1.);
+    } else {
+        c.line(&[(x, y + 6.), (x, y - 7.), (x - 4., y - 3.)], ink, 1., 1.5);
+        c.line(&[(x, y - 7.), (x + 4., y - 3.)], ink, 1., 1.5);
+        c.line(
+            &[(x, y + 2.), (x + 6., y - 1.), (x + 6., y - 4.)],
+            ink,
+            1.,
+            1.5,
+        );
+        c.circle(x, y + 6., 2., ink, 1.);
+    }
+    c.fitted_text(
+        if v.sound.transport == Some(audeze_overlay::model::Connection::Bluetooth) {
+            "Bluetooth"
+        } else if v.sound.mix.is_some() {
+            if v.sound.transport == Some(audeze_overlay::model::Connection::WiredUsb) {
+                "Wired"
+            } else {
+                "Wireless"
+            }
         } else {
             "Offline"
         },
@@ -451,7 +516,38 @@ pub(super) fn status_icons(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, width:
         1.5,
     );
     c.rect(Box2::new(x + 19., y - 3., 2., 6.), ink, 1., 0.);
-    if let Some(b) = v.sound.battery {
+    if v.sound.charging == Some(true) {
+        c.line(
+            &[
+                (x + 13., y - 5.),
+                (x + 8., y),
+                (x + 12., y),
+                (x + 7., y + 5.),
+            ],
+            ink,
+            1.,
+            1.5,
+        );
+    }
+    if v.sound.usb_cable {
+        // Plug = USB power is available. A bolt would assert measured charging.
+        c.line(
+            &[
+                (x + 7., y - 5.),
+                (x + 7., y - 2.),
+                (x + 5., y - 2.),
+                (x + 5., y + 2.),
+                (x + 13., y + 2.),
+                (x + 13., y - 2.),
+                (x + 11., y - 2.),
+                (x + 11., y - 5.),
+            ],
+            ink,
+            1.,
+            1.3,
+        );
+        c.line(&[(x + 9., y + 2.), (x + 9., y + 5.)], ink, 1., 1.3);
+    } else if let Some(b) = v.sound.battery.filter(|_| v.sound.charging != Some(true)) {
         c.rect(
             Box2::new(x + 3., y - 3., 12. * b as f32 / 100., 6.),
             ink,
@@ -460,10 +556,7 @@ pub(super) fn status_icons(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, width:
         );
     }
     c.text(
-        &v.sound
-            .battery
-            .map(|b| format!("{b}%"))
-            .unwrap_or_else(|| "—".into()),
+        &v.sound.battery_label(),
         Box2::new(x + 27., y - 8., step - 28., 20.),
         13.,
         ink,
@@ -522,7 +615,7 @@ fn odometer(c: &mut Canvas, r: Box2, size: f32, old: (u8, u8), new: (u8, u8), p:
     let game_columns = digits(new.0).max(if p < 1. { digits(old.0) } else { 0 });
     let chat_columns = digits(new.1).max(if p < 1. { digits(old.1) } else { 0 });
     let columns = game_columns + chat_columns + 1;
-    let cell = (r.w / columns as f32).min(size * 0.76);
+    let cell = (r.w / columns as f32).min(size * 0.68);
     let mut size = size;
     while size > 10. {
         let px = (size * c.scale).round().max(1.);
@@ -535,6 +628,16 @@ fn odometer(c: &mut Canvas, r: Box2, size: f32, old: (u8, u8), new: (u8, u8), p:
         }
         size -= 0.5;
     }
+    // Center actual numeral ink, not a font's asymmetric line box. Recalculate
+    // after fitting so narrower cards do not shift the digits off the dial axis.
+    let px = (size * c.scale).round().max(1.);
+    let metrics = c.painter.fonts[1].metrics('0', px);
+    let ascent = c.painter.fonts[1]
+        .horizontal_line_metrics(px)
+        .map(|m| m.ascent)
+        .unwrap_or(px);
+    let ink_center = (ascent - metrics.height as f32 / 2. - metrics.ymin as f32) / c.scale;
+    let r = Box2::new(r.x, r.y + r.h / 2. - ink_center, r.w, r.h);
     let left = r.x + (r.w - cell * columns as f32) / 2.;
     let clip = Box2::new(left, r.y, cell * columns as f32, size + 8.);
     c.text_clipped(

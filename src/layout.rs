@@ -42,11 +42,89 @@ fn card(x: i32, y: i32, w: i32, h: i32) -> Card {
         visible: true,
     }
 }
-pub fn minimum(i: usize) -> (i32, i32) {
-    match i {
-        0 => (5, 8),
-        _ => (5, 3),
+pub fn minimum(_i: usize) -> (i32, i32) {
+    // A short mix card uses its slider presentation instead of clipping a dial.
+    (5, 3)
+}
+
+/// Grow a card at its origin and push intersecting neighbours in the direction
+/// of growth. Each pass only moves forward, so six cards converge in at most
+/// six passes. Failure leaves the original layout intact.
+pub fn resize_pushing(
+    cards: &mut [Card; 6],
+    i: usize,
+    proposed: Card,
+    cols: i32,
+    rows: i32,
+) -> bool {
+    if i >= cards.len() || !cards[i].visible || !valid_in(cards, cols, rows) {
+        return false;
     }
+    let mut next = *cards;
+    let old = next[i];
+    next[i].w = proposed.w.clamp(minimum(i).0, cols - old.x);
+    next[i].h = proposed.h.clamp(minimum(i).1, rows - old.y);
+    let horizontal = next[i].w > old.w && next[i].h <= old.h;
+    let mut settled = [false; 6];
+    settled[i] = true;
+    for _ in 0..6 {
+        let mut progress = false;
+        for a in 0..6 {
+            if !settled[a] || !next[a].visible {
+                continue;
+            }
+            for b in 0..6 {
+                if a == b || settled[b] || !next[b].visible || !next[a].overlaps(next[b]) {
+                    continue;
+                }
+                if horizontal {
+                    next[b].x = next[a].x + next[a].w;
+                } else {
+                    next[b].y = next[a].y + next[a].h;
+                }
+                progress = true;
+            }
+        }
+        for b in 0..6 {
+            if b != i && next[b] != cards[b] {
+                settled[b] = true;
+            }
+        }
+        // Resolve collisions between displaced cards in their original order.
+        for a in 0..6 {
+            for b in a + 1..6 {
+                if !next[a].visible || !next[b].visible || !next[a].overlaps(next[b]) {
+                    continue;
+                }
+                let (front, back) = if b == i
+                    || (a != i
+                        && if horizontal {
+                            cards[b].x < cards[a].x
+                        } else {
+                            cards[b].y < cards[a].y
+                        }) {
+                    (b, a)
+                } else {
+                    (a, b)
+                };
+                if horizontal {
+                    next[back].x = next[front].x + next[front].w;
+                } else {
+                    next[back].y = next[front].y + next[front].h;
+                }
+                settled[back] = true;
+                progress = true;
+            }
+        }
+        if valid_in(&next, cols, rows) {
+            *cards = next;
+            return true;
+        }
+        if !progress {
+            break;
+        }
+    }
+    false
 }
 /// Place on the nearest unoccupied grid cells; never silently overlap controls.
 pub fn place(cards: &mut [Card; 6], i: usize, proposed: Card, rows: i32) -> bool {
@@ -156,6 +234,9 @@ pub fn valid_in(cards: &[Card; 6], cols: i32, rows: i32) -> bool {
 
 fn in_slot(c: Card, i: usize, slot: Card, cols: i32, rows: i32) -> Card {
     let (min_w, min_h) = minimum(i);
+    // Swapping a full dial retains room for its circular presentation. Cards
+    // explicitly resized to a slider remain short when moved between slots.
+    let min_h = if i == 0 && c.h >= 8 { 8 } else { min_h };
     let w = c.w.min(slot.w).max(min_w).min(cols);
     let h = c.h.min(slot.h).max(min_h).min(rows);
     Card {
@@ -374,6 +455,48 @@ pub fn restore(cards: &mut [Card; 6], i: usize, cols: i32, rows: i32) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn growing_pushes_neighbours_and_rejects_an_impossible_extent_atomically() {
+        let mut cards = defaults();
+        let before = cards;
+        let grow = Card { h: 7, ..cards[1] };
+        assert!(resize_pushing(&mut cards, 1, grow, 12, 24));
+        assert_eq!(cards[1], grow);
+        assert_eq!(cards[2].y, 7);
+        assert_eq!(cards[3].y, 11);
+        assert_eq!(cards[4].y, 15);
+        assert!(valid_in(&cards, 12, 24));
+        let mut crowded = before;
+        assert!(!resize_pushing(&mut crowded, 1, grow, 12, 15));
+        assert_eq!(crowded, before);
+        let mut wide = before;
+        let grow = Card { w: 8, ..wide[0] };
+        assert!(resize_pushing(&mut wide, 0, grow, 20, 20));
+        assert_eq!(wide[1].x, 8);
+        assert_eq!(wide[2].x, 8);
+        assert!(valid_in(&wide, 20, 20));
+    }
+    #[test]
+    fn minimal_mix_resizes_and_moves_without_regrowing() {
+        let mut cards = defaults();
+        let small = Card { h: 3, ..cards[0] };
+        assert!(resize_pushing(&mut cards, 0, small, 12, 15));
+        let moved = preview_move_in(
+            &cards,
+            0,
+            Card {
+                x: 6,
+                y: 8,
+                ..small
+            },
+            (8., 9.),
+            12,
+            15,
+        )
+        .unwrap();
+        assert_eq!(moved[0].h, 3);
+        assert!(valid_in(&moved, 12, 15));
+    }
     #[test]
     fn moves_and_resizes_without_overlap() {
         let mut c = defaults();

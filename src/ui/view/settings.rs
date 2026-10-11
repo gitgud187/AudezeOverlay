@@ -160,7 +160,7 @@ pub(super) fn settings_page(
         0 => "Change how the overlay looks. Text and icons always stay solid.",
         1 => "Use + to add cards, … to remove. Drag to move; corners resize.",
         2 => "Choose when the overlay appears while you play.",
-        3 => "Record a key or a modifier + key, then click End recording.",
+        3 => "Record a key or a modifier + key, then save it.",
         4 => "The USB dongle connects directly. The Audeze app can stay closed.",
         5 => "Choose an EQ, pin quick switches, or tune a custom headset slot.",
         _ => "",
@@ -218,16 +218,17 @@ pub(super) fn settings_page(
                     None,
                 );
             }
-            toggle_row(
+            row(
                 c,
                 hits,
                 v,
                 505.,
                 w,
-                "Blur behind the overlay",
-                "Softens the scene behind transparent areas. Text stays sharp.",
+                "Backdrop blur strength",
+                "Adjusts the Windows acrylic effect. 0 turns it off.",
                 "blur",
-                v.config.background_blur,
+                &format!("{}%", v.config.blur_strength),
+                None,
             );
             toggle_row(
                 c,
@@ -235,63 +236,29 @@ pub(super) fn settings_page(
                 v,
                 585.,
                 w,
-                "Smooth animations",
-                "Brief dial and popup transitions. No animation runs while idle.",
+                "Animate controls",
+                "Smooths mix numbers, buttons and card moves. Stops when idle.",
                 "animations",
                 v.config.animations,
             );
         }
         1 => {
-            for i in 0..6 {
-                let keys = ["card0", "card1", "card2", "card3", "card4", "card5"];
-                let help = [
-                    "Circular balance control for game and voice chat.",
-                    "Hear your microphone in the headset and adjust its level.",
-                    "Switch ANC on, off, or into Transparency mode.",
-                    "Reduce background noise picked up by your microphone.",
-                    "Headset name, USB connection, battery, and microphone status.",
-                    "Quick EQ switching and a shortcut to the custom EQ editor.",
-                ];
-                toggle_row(
-                    c,
-                    hits,
-                    v,
-                    174. + i as f32 * 54.,
-                    w,
-                    layout::NAMES[i],
-                    help[i],
-                    keys[i],
-                    v.config.cards[i].visible,
-                );
-            }
             toggle_row(
                 c,
                 hits,
                 v,
-                504.,
+                185.,
                 w,
-                "Status row under logo",
-                "Fixed model and status icons. Add or remove in layout mode; cannot be moved.",
-                "status-icons",
-                v.config.status_icons,
-            );
-            row(
-                c,
-                hits,
-                v,
-                566.,
-                w,
-                "Grid rows",
-                "Adds empty room below the cards. Finish editing to trim unused room.",
-                "rows",
-                &v.config.grid_rows.to_string(),
-                None,
+                "Keep empty space",
+                "Preserve gaps between cards and room around the edges.",
+                "preserve-space",
+                v.config.preserve_space,
             );
             button(
                 c,
                 hits,
                 v,
-                Box2::new(218., 648., 172., 36.),
+                Box2::new(218., 268., 172., 36.),
                 "Edit card layout",
                 Action::Edit,
                 false,
@@ -300,57 +267,90 @@ pub(super) fn settings_page(
                 c,
                 hits,
                 v,
-                Box2::new(402., 648., 172., 36.),
+                Box2::new(402., 268., 172., 36.),
                 "Reset card layout",
                 Action::Setting("reset-layout", 0),
                 false,
             );
+            c.wrapped_text("Add and remove cards in layout mode. Use a card's three-dot menu for its display options. Resizing a card moves neighbours and makes room automatically.", Box2::new(218., 330., w - 256., 100.), 16., SUB);
         }
         2 => {
-            c.text(
-                "Automatic popups",
-                Box2::new(w - 280., 94., 182., 30.),
-                16.,
-                FG,
-                true,
-                false,
-            );
-            switch(
+            toggle_row(
                 c,
                 hits,
-                Box2::new(w - 92., 94., 54., 28.),
+                v,
+                174.,
+                w,
+                "Automatic popups",
+                "Show headset changes while you play.",
+                "automatic",
                 v.config.auto_show,
-                Action::Setting("automatic", 0),
             );
-            let keys = ["notify0", "notify1", "notify2", "notify3", "notify4"];
-            let titles = [
-                "Game / Chat Mix",
-                "Sidetone changes",
-                "Noise cancellation",
-                "AI noise removal",
-                "Microphone mute",
-            ];
-            for i in 0..5 {
-                toggle_row(
-                    c,
-                    hits,
-                    v,
-                    176. + i as f32 * 61.,
-                    w,
-                    titles[i],
-                    "Show a temporary popup when this headset setting changes.",
-                    keys[i],
-                    v.config.notify[i],
-                );
+            toggle_row(
+                c,
+                hits,
+                v,
+                240.,
+                w,
+                "Only show changed cards",
+                "Temporary popups show the affected controls. Manual opening shows all cards.",
+                "changed-card-only",
+                v.config.changed_card_only,
+            );
+            button(
+                c,
+                hits,
+                v,
+                Box2::new(218., 306., w - 256., 32.),
+                if v.notification_options {
+                    "Hide notification types  −"
+                } else {
+                    "Choose notification types  +"
+                },
+                Action::NotificationOptions,
+                false,
+            );
+            if v.notification_options {
+                for (i, title) in [
+                    "Game / Chat Mix",
+                    "Sidetone",
+                    "Noise cancellation",
+                    "AI noise removal",
+                    "Microphone mute",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    let y = 350. + i as f32 * 36.;
+                    c.text(
+                        title,
+                        Box2::new(230., y, w - 350., 28.),
+                        16.,
+                        FG,
+                        false,
+                        false,
+                    );
+                    switch(
+                        c,
+                        hits,
+                        Box2::new(w - 92., y, 54., 24.),
+                        v.config.notify[i],
+                        Action::Setting(
+                            ["notify0", "notify1", "notify2", "notify3", "notify4"][i],
+                            0,
+                        ),
+                    );
+                }
             }
+            let y = if v.notification_options { 537. } else { 363. };
             row(
                 c,
                 hits,
                 v,
-                486.,
+                y,
                 w,
                 "Keep visible for",
-                "1000 ms = 1 second. Delay before the popup begins to fade.",
+                "Delay before the popup starts to fade (milliseconds).",
                 "hold",
                 &format!("{} ms", v.config.duration_ms),
                 None,
@@ -359,10 +359,10 @@ pub(super) fn settings_page(
                 c,
                 hits,
                 v,
-                558.,
+                y + 76.,
                 w,
                 "Fade-out duration",
-                "0 ms hides immediately. Manually opened controls stay open.",
+                "0 ms hides immediately. Manual controls stay open.",
                 "fade",
                 &format!("{} ms", v.config.fade_ms),
                 None,
@@ -371,7 +371,12 @@ pub(super) fn settings_page(
                 c,
                 hits,
                 v,
-                Box2::new(218., 638., 170., 34.),
+                Box2::new(
+                    218.,
+                    if v.notification_options { 691. } else { 527. },
+                    170.,
+                    26.,
+                ),
                 "Preview popup",
                 Action::Setting("preview", 0),
                 false,
@@ -418,7 +423,7 @@ pub(super) fn settings_page(
                 v,
                 Box2::new(218., 332., 190., 38.),
                 if v.recording {
-                    "End recording"
+                    "Save shortcut"
                 } else {
                     "Record shortcut"
                 },
@@ -429,6 +434,17 @@ pub(super) fn settings_page(
                 },
                 false,
             );
+            if v.recording {
+                button(
+                    c,
+                    hits,
+                    v,
+                    Box2::new(420., 332., 150., 38.),
+                    "Discard",
+                    Action::DiscardRecord,
+                    false,
+                );
+            }
             c.text(
                 "Examples: Home, Alt + Home, Ctrl + F9",
                 Box2::new(218., 388., w - 250., 28.),
@@ -454,7 +470,7 @@ pub(super) fn settings_page(
                 false,
             );
             c.text(
-                "Escape cancels. Recording stays open until you click End recording.",
+                "Escape cancels. Recording stays open until you save or discard.",
                 Box2::new(218., 508., w - 250., 28.),
                 15.,
                 SUB,
@@ -540,7 +556,16 @@ pub(super) fn settings_page(
             );
             c.text("Reset app restores all preferences, layout and shortcuts. Headset sound is unchanged.", Box2::new(218., 630., w - 250., 40.), 13., SUB, false, false);
             c.text(
-                "Connection: Maxwell 2 ANC USB dongle",
+                &format!(
+                    "{} · {}{}",
+                    v.sound.device.as_deref().unwrap_or("Headset disconnected"),
+                    v.sound.connection.as_deref().unwrap_or("No connection"),
+                    if v.sound.experimental_device {
+                        " · Experimental"
+                    } else {
+                        ""
+                    }
+                ),
                 Box2::new(218., 651., w - 250., 24.),
                 15.,
                 SUB,
@@ -564,7 +589,7 @@ pub(super) fn settings_page(
     };
     c.text(
         note,
-        Box2::new(218., h - 36., w - 250., 28.),
+        Box2::new(218., h - 27., w - 250., 24.),
         14.,
         FG,
         false,

@@ -1,6 +1,7 @@
 //! Fixed-size headset EQ data. Native preset slots are 0..5, custom slots 6..9.
 use serde::{Deserialize, Serialize};
 mod native_names;
+pub mod profiles;
 pub const PRESET_NAMES: [&str; 10] = [
     "Audeze",
     "Treble Boost",
@@ -187,6 +188,9 @@ pub struct Editor {
     pub name_edit: Option<String>,
     pub name_selected: bool,
     pub preview_slot: Option<u8>,
+    /// Local library association for each custom bank; never a device slot ID.
+    pub library_entries: [Option<usize>; 4],
+    pub preview_names: [Option<String>; 4],
 }
 impl Editor {
     pub fn draft(&self) -> Option<&Draft> {

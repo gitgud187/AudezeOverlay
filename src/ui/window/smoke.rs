@@ -326,12 +326,34 @@ pub(super) unsafe fn smoke(app: &mut App) {
                     && !app.eq_editor.draft().unwrap().dirty(),
             ));
             act(app, Action::EqUse(6), 0., 0.);
+            let original_profile = app.config.eq_library[0].clone();
+            preview_eq_gain(app, 2, 6.);
+            act(app, Action::EqSaveNew, 0., 0.);
+            app.checks.push((
+                "eq_save_as_new_preserves_existing_profile".into(),
+                app.config.eq_library.len() == 2
+                    && app.config.eq_library[0] == original_profile
+                    && app.config.eq_library[1].bands[2].gain == 6.,
+            ));
+            act(app, Action::EqDiscard, 0., 0.);
+            app.checks.push((
+                "eq_discard_keeps_library_copy_and_restores_headset".into(),
+                app.config.eq_library[1].bands[2].gain == 6.
+                    && app.sound.eq_bands.unwrap().bands[2].gain == 4.,
+            ));
             app.checks
                 .push(("eq_quick_selection".into(), app.sound.eq_index == Some(6)));
             act(app, Action::EqPin(6), 0., 0.);
             app.checks
                 .push(("eq_pin_visibility".into(), !app.config.eq.visible(6)));
             setting(app, "eq-factory", 0);
+            render(app);
+            app.checks.push((
+                "factory_presets_hidden_in_settings".into(),
+                !app.hits
+                    .iter()
+                    .any(|h| matches!(h.action, Action::EqInspect(slot) if slot < 6)),
+            ));
             app.checks
                 .push(("eq_factory_visibility".into(), !app.config.eq.visible(0)));
             act(app, Action::EqRename, 0., 0.);
@@ -352,6 +374,31 @@ pub(super) unsafe fn smoke(app: &mut App) {
                     && app.sound == sound_before_reset,
             ));
             app.config.position = Some((-30000, -30000));
+            app.recording = true;
+            app.recorded_key = Some((2, 0x24));
+            events::dispatch(app, app.hwnd, WM_KILLFOCUS, WPARAM(0), LPARAM(0));
+            app.checks.push((
+                "shortcut_draft_survives_focus_loss".into(),
+                app.recording && app.recorded_key == Some((2, 0x24)),
+            ));
+            act(app, Action::DiscardRecord, 0., 0.);
+            app.checks.push((
+                "shortcut_discard_is_explicit".into(),
+                !app.recording && app.recorded_key.is_none(),
+            ));
+            let full = app.config.clone();
+            app.popup_cards = Some(1);
+            show(app, false);
+            render(app);
+            app.checks.push((
+                "changed_card_popup_is_temporary_and_noninteractive".into(),
+                app.hits.is_empty() && app.config.cards == full.cards && app.cards[0].y < 20.,
+            ));
+            show(app, true);
+            app.checks.push((
+                "manual_open_restores_full_layout".into(),
+                app.popup_cards.is_none() && app.config.cards == full.cards,
+            ));
             reset(app);
             let mut r = RECT::default();
             let _ = GetWindowRect(app.hwnd, &mut r);

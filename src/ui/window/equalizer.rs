@@ -24,6 +24,9 @@ pub(super) unsafe fn open_eq(app: &mut App) {
     if app.eq_editor.banks.iter().all(Option::is_none) {
         app.eq_editor.selected = app.sound.eq_index.unwrap_or(6);
     }
+    if !app.config.eq.show_factory && app.eq_editor.selected < 6 {
+        app.eq_editor.selected = 6;
+    }
     send(app, Command::EqRefresh);
     inspect_eq(app, app.eq_editor.selected);
 }
@@ -34,7 +37,7 @@ pub(super) unsafe fn inspect_eq(app: &mut App, slot: u8) {
     commit_eq_name(app);
     app.eq_editor.selected = slot;
     app.eq_editor.preview_slot = None;
-    if slot >= 6 {
+    if slot >= 6 && !app.sound.capabilities.is_some_and(|caps| !caps.eq_edit) {
         send(app, Command::EqLoad(slot));
     }
     request_draw(app);
@@ -73,10 +76,22 @@ pub(super) unsafe fn preview_eq_gain(app: &mut App, index: usize, gain: f32) {
     send(app, Command::EqGain { slot, band });
 }
 pub(super) unsafe fn save_eq(app: &mut App) {
-    finish_eq_preview(app, false);
+    if remember_current_profile(app, false) {
+        finish_eq_preview(app, false);
+        if let Some(bank) = app.eq_editor.selected.checked_sub(6) {
+            app.eq_editor.preview_names[bank as usize] = None;
+        }
+    }
 }
 pub(super) unsafe fn discard_eq(app: &mut App) {
     finish_eq_preview(app, true);
+    if let Some(bank) = app.eq_editor.selected.checked_sub(6) {
+        if let Some(name) = app.eq_editor.preview_names[bank as usize].take() {
+            app.config.eq.names[bank as usize] = name;
+            app.eq_editor.library_entries[bank as usize] = None;
+            save(app);
+        }
+    }
 }
 unsafe fn finish_eq_preview(app: &mut App, discard: bool) {
     if app.sound.mix.is_none() {

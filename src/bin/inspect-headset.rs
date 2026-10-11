@@ -9,6 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     HidApi::disable_device_discovery();
     let mut api = HidApi::new()?;
     api.add_devices(0x3329, 0x4ba9)?;
+    api.add_devices(0x3329, 0x4baa)?;
     for info in api.device_list().filter(|d| d.vendor_id() == 0x3329) {
         println!(
             "{:04x}:{:04x} usage {:04x}/{:04x} interface {} {}",
@@ -19,7 +20,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             info.interface_number(),
             info.path().to_string_lossy()
         );
-        if !std::env::args().any(|s| s == "--query") || info.usage_page() < 0xff00 {
+        if !std::env::args().any(|s| s == "--query")
+            || info.usage_page() != 0xff13
+            || info.usage() != 1
+        {
             continue;
         }
         let d = info.open_device(&api)?;
@@ -51,7 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut report = [0u8; 62];
             report[0] = 6;
             report[1] = body.len() as u8;
-            report[2] = 0x80;
+            report[2] = if info.product_id() == 0x4baa { 0 } else { 0x80 };
             report[3..3 + body.len()].copy_from_slice(&body);
             let started = Instant::now();
             d.write(&report)?;

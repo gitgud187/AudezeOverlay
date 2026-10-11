@@ -1,7 +1,69 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HeadsetFamily {
+    Maxwell,
+    Maxwell2,
+    Maxwell2Anc,
+}
+impl HeadsetFamily {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Maxwell => "Maxwell",
+            Self::Maxwell2 => "Maxwell 2",
+            Self::Maxwell2Anc => "Maxwell 2 ANC",
+        }
+    }
+    pub fn settings_section(self) -> &'static str {
+        match self {
+            Self::Maxwell => "maxwell",
+            Self::Maxwell2 => "maxwell_2",
+            Self::Maxwell2Anc => "maxwell_2_anc",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Connection {
+    WirelessDongle,
+    WiredUsb,
+    Bluetooth,
+}
+impl Connection {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::WirelessDongle => "Wireless dongle",
+            Self::WiredUsb => "Wired USB",
+            Self::Bluetooth => "Bluetooth (Windows)",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Capabilities {
+    pub anc: bool,
+    pub eq_edit: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SoundState {
+    #[serde(default)]
+    pub family: Option<HeadsetFamily>,
+    #[serde(default)]
+    pub transport: Option<Connection>,
+    #[serde(default)]
+    pub capabilities: Option<Capabilities>,
+    #[serde(default)]
+    pub experimental_device: bool,
+    #[serde(default)]
+    pub xbox: bool,
+    #[serde(default)]
+    pub sidetone_max: Option<u8>,
+    /// Unknown until a validated charging-status source exists. USB presence
+    /// alone proves power availability, not charging current or battery health.
+    #[serde(default)]
+    pub charging: Option<bool>,
+    /// Matching data-capable cable present on this PC; not measured charging.
+    #[serde(default)]
+    pub usb_cable: bool,
     pub mix: Option<(u8, u8)>,
     /// Last settled local mix command; not a headset setting or preset field.
     #[serde(skip)]
@@ -41,6 +103,40 @@ pub fn reconcile_mix(target: &mut Option<MixTarget>, incoming: &mut SoundState) 
     }
 }
 impl SoundState {
+    /// USB charging can bias the firmware's estimate; do not invent a correction.
+    pub fn battery_label(&self) -> String {
+        self.battery
+            .map(|value| {
+                if self.usb_cable {
+                    format!("~{value}%")
+                } else {
+                    format!("{value}%")
+                }
+            })
+            .unwrap_or_else(|| "—".into())
+    }
+    /// Bit positions match the five status cards; first readings and unavailable
+    /// values do not count as headset adjustments.
+    pub fn changed_cards(&self, old: &Self, enabled: [bool; 5]) -> u8 {
+        fn changed<T: PartialEq>(a: &Option<T>, b: &Option<T>) -> bool {
+            a.is_some() && b.is_some() && a != b
+        }
+        let changes = [
+            changed(&self.mix, &old.mix),
+            changed(&self.sidetone, &old.sidetone)
+                || changed(&self.sidetone_level, &old.sidetone_level),
+            changed(&self.anc, &old.anc),
+            changed(&self.noise, &old.noise),
+            changed(&self.muted, &old.muted),
+        ];
+        changes
+            .into_iter()
+            .zip(enabled)
+            .enumerate()
+            .fold(0, |mask, (i, (changed, enabled))| {
+                mask | if changed && enabled { 1 << i } else { 0 }
+            })
+    }
     pub fn sound_changed(&self, old: &Self) -> bool {
         fn changed<T: PartialEq>(a: &Option<T>, b: &Option<T>) -> bool {
             a.is_some() && b.is_some() && a != b
@@ -82,6 +178,28 @@ pub fn mix_from_point(dx: f32, dy: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn popup_mask_includes_only_changed_enabled_available_fields() {
+        let old = SoundState {
+            mix: Some((50, 50)),
+            battery: Some(60),
+            muted: Some(false),
+            ..Default::default()
+        };
+        let mut next = old.clone();
+        next.mix = Some((45, 55));
+        next.muted = Some(true);
+        next.anc = Some("On".into());
+        next.battery = Some(59);
+        assert_eq!(next.changed_cards(&old, [true; 5]), 1 | 16);
+        assert_eq!(
+            next.changed_cards(&old, [false, true, true, true, true]),
+            16
+        );
+        next.mix = None;
+        next.muted = None;
+        assert_eq!(next.changed_cards(&old, [true; 5]), 0);
+    }
     #[test]
     fn newer_wheel_target_survives_old_readbacks() {
         let mut target = Some(MixTarget {

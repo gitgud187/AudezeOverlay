@@ -20,6 +20,14 @@ pub struct Config {
     pub background_opacity: u8,
     pub card_opacity: u8,
     pub background_blur: bool,
+    /// Acrylic backdrop strength. The legacy boolean still migrates disabled blur.
+    pub blur_strength: u8,
+    pub preserve_space: bool,
+    pub minimal_cards: [bool; 6],
+    pub inline_eq: bool,
+    pub changed_card_only: bool,
+    #[serde(skip)]
+    pub popup: bool,
     #[serde(deserialize_with = "deserialize_cards")]
     pub cards: [crate::layout::Card; 6],
     pub grid_rows: i32,
@@ -38,6 +46,9 @@ pub struct Config {
     pub settings_page: usize,
     pub status_icons: bool,
     pub eq: crate::eq::Preferences,
+    pub eq_library: Vec<crate::eq::profiles::Profile>,
+    pub eq_profile: String,
+    pub eq_profiles: std::collections::BTreeMap<String, crate::eq::Preferences>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -54,6 +65,12 @@ impl Default for Config {
             background_opacity: 70,
             card_opacity: 70,
             background_blur: true,
+            blur_strength: 50,
+            preserve_space: false,
+            minimal_cards: [false; 6],
+            inline_eq: false,
+            changed_card_only: false,
+            popup: false,
             cards: crate::layout::defaults(),
             grid_rows: 15,
             grid_columns: 12,
@@ -70,16 +87,61 @@ impl Default for Config {
             settings_page: 0,
             status_icons: false,
             eq: crate::eq::Preferences::default(),
+            eq_library: Vec::new(),
+            eq_profile: "maxwell_2_anc/ps".into(),
+            eq_profiles: Default::default(),
         }
     }
 }
 impl Config {
+    /// Preserve local renames and pins independently for each model/platform.
+    pub fn select_eq_profile(&mut self, family: crate::model::HeadsetFamily, xbox: bool) {
+        let key = format!(
+            "{}/{}",
+            family.settings_section(),
+            if xbox { "xbox" } else { "ps" }
+        );
+        if self.eq_profile != key {
+            self.eq_profiles
+                .insert(self.eq_profile.clone(), self.eq.clone());
+            self.eq = self.eq_profiles.remove(&key).unwrap_or_default();
+            self.eq_profile = key;
+        }
+        self.eq.import_model_names(family, xbox);
+    }
     pub fn card_top(&self) -> f32 {
-        if self.status_icons {
+        if self.popup {
+            8.
+        } else if self.status_icons {
             142.
         } else {
             74.
         }
+    }
+    /// A temporary layout only; never overwrites the player's saved card positions.
+    pub fn notification_layout(&self, mask: u8) -> Self {
+        let mut result = self.clone();
+        result.popup = true;
+        result.status_icons = false;
+        result.preserve_space = false;
+        let mut y = 0;
+        for (i, card) in result.cards.iter_mut().enumerate() {
+            card.visible = mask & (1 << i) != 0;
+            if card.visible {
+                card.x = 0;
+                card.y = y;
+                card.w = card.w.clamp(5, 7);
+                card.h = if i == 0 && !result.minimal_cards[0] {
+                    8
+                } else {
+                    3
+                };
+                y += card.h;
+            }
+        }
+        result.width = result.minimum_width();
+        result.height = result.minimum_height();
+        result
     }
     pub fn vertical_padding(&self) -> f32 {
         self.card_top() + 16.
@@ -111,6 +173,10 @@ impl Config {
             self.canvas_cells(self.width as f32, self.height as f32);
     }
     pub fn trim_canvas(&mut self) {
+        if self.preserve_space {
+            self.fit_layout();
+            return;
+        }
         crate::layout::compact(&mut self.cards);
         self.resize_canvas(self.minimum_width(), self.minimum_height());
     }
@@ -153,6 +219,11 @@ impl Config {
         c.text_scale = c.text_scale.clamp(100, 140);
         c.background_opacity = c.background_opacity.min(100);
         c.card_opacity = c.card_opacity.clamp(10, 100);
+        c.blur_strength = if c.background_blur {
+            c.blur_strength.min(100)
+        } else {
+            0
+        };
         c.grid_rows = c.grid_rows.clamp(1, 80);
         c.migrate_layout();
         c.low_battery = c.low_battery.min(50);
@@ -181,7 +252,11 @@ impl Config {
             c.cards = crate::layout::defaults();
         }
         c.settings_page = c.settings_page.min(5);
-        c.eq.import_native_names();
+        c.eq_library.retain(|p| p.validate().is_ok());
+        c.eq_library.truncate(crate::eq::profiles::MAX_PROFILES);
+        if c.eq_profile == "maxwell_2_anc/ps" {
+            c.eq.import_native_names();
+        }
         c.fit_layout();
         c
     }
@@ -276,6 +351,35 @@ fn deserialize_cards<'de, D: serde::Deserializer<'de>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preserving_space_keeps_gaps_edges_and_card_dimensions() {
+        let mut c = Config {
+            preserve_space: true,
+            ..Default::default()
+        };
+        for card in &mut c.cards {
+            card.x += 2;
+            card.y += 2;
+        }
+        c.resize_canvas(1200, 1000);
+        let before = c.clone();
+        c.trim_canvas();
+        assert_eq!(c.cards, before.cards);
+        assert_eq!((c.width, c.height), (before.width, before.height));
+        c.preserve_space = false;
+        c.trim_canvas();
+        assert!(c.width < before.width && c.height < before.height);
+    }
+    #[test]
+    fn changed_card_popup_does_not_modify_saved_layout() {
+        let c = Config::default();
+        let popup = c.notification_layout((1 << 1) | (1 << 3));
+        assert_eq!(popup.cards.iter().filter(|card| card.visible).count(), 2);
+        assert_eq!(popup.cards[1].y, 0);
+        assert_eq!(popup.cards[3].y, 3);
+        assert_eq!(c.cards, crate::layout::defaults());
+        assert!(popup.width < c.width && popup.height < c.height);
+    }
     #[test]
     fn settings_replace_an_existing_file_and_keep_exact_input() {
         let path = std::env::temp_dir().join(format!(

@@ -337,6 +337,34 @@ impl<'a> Canvas<'a> {
     pub fn text(&mut self, text: &str, r: Box2, size: f32, color: u32, bold: bool, center: bool) {
         self.text_alpha(text, r, size, color, bold, center, 1.);
     }
+    pub fn fitted_text(
+        &mut self,
+        text: &str,
+        r: Box2,
+        size: f32,
+        color: u32,
+        bold: bool,
+        center: bool,
+    ) {
+        let mut size = size.min((r.h - 2.).max(1.));
+        while size > 11. {
+            let px = (size * self.scale).round().max(1.);
+            let width: f32 = text
+                .chars()
+                .map(|ch| {
+                    self.painter.fonts[usize::from(bold)]
+                        .metrics(ch, px)
+                        .advance_width
+                        / self.scale
+                })
+                .sum();
+            if width <= r.w - 1. {
+                break;
+            }
+            size -= 0.5;
+        }
+        self.text_clipped(text, r, size, color, bold, center, r);
+    }
     // Immediate-mode drawing keeps geometry and paint parameters explicit.
     #[allow(clippy::too_many_arguments)]
     pub fn text_alpha(

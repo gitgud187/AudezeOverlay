@@ -18,6 +18,14 @@ struct Attribute {
     size: usize,
 }
 pub unsafe fn apply(hwnd: HWND, enabled: bool) -> bool {
+    apply_strength(hwnd, if enabled { 50 } else { 0 })
+}
+
+/// Windows controls the blur kernel. Strength adjusts acrylic's neutral tint;
+/// zero disables the compositor effect entirely, without a screen-capture loop.
+pub unsafe fn apply_strength(hwnd: HWND, strength: u8) -> bool {
+    let strength = strength.min(100);
+    let enabled = strength > 0;
     configure_frame(hwnd, enabled);
     let Ok(module) = GetModuleHandleW(w!("user32.dll")) else {
         return false;
@@ -30,7 +38,11 @@ pub unsafe fn apply(hwnd: HWND, enabled: bool) -> bool {
     let mut accent = Accent {
         state: if enabled { 4 } else { 0 },
         flags: 0,
-        tint: if enabled { 0x20101010 } else { 0 },
+        tint: if enabled {
+            ((8 + u32::from(strength) * 48 / 100) << 24) | 0x101010
+        } else {
+            0
+        },
         animation: 0,
     };
     let mut data = Attribute {

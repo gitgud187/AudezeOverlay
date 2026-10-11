@@ -1,9 +1,12 @@
-//! Read-only import of Qt's per-user labels for the supported PS ANC dongle.
+//! Read-only import of Qt's per-user labels for the selected model and platform.
 //! Names are PC-local; the headset stores the curves, not these labels.
 use super::{Preferences, PRESET_NAMES};
 use std::path::PathBuf;
 impl Preferences {
     pub fn import_native_names(&mut self) {
+        self.import_model_names(crate::model::HeadsetFamily::Maxwell2Anc, false);
+    }
+    pub fn import_model_names(&mut self, family: crate::model::HeadsetFamily, xbox: bool) {
         let Some(root) = std::env::var_os("LOCALAPPDATA") else {
             return;
         };
@@ -13,22 +16,32 @@ impl Preferences {
             return;
         }
         if let Ok(text) = std::fs::read_to_string(path) {
-            self.import_ini(&text);
+            self.import_profile_ini(&text, family.settings_section(), xbox);
         }
     }
+    #[cfg(test)]
     fn import_ini(&mut self, text: &str) {
+        self.import_profile_ini(text, "maxwell_2_anc", false);
+    }
+    fn import_profile_ini(&mut self, text: &str, wanted_section: &str, xbox: bool) {
         let mut section = "";
         for line in text.lines().map(str::trim) {
             if line.starts_with('[') && line.ends_with(']') {
                 section = &line[1..line.len() - 1];
             }
-            if section != "maxwell_2_anc" {
+            if section != wanted_section {
                 continue;
             }
             let Some((key, value)) = line.split_once('=') else {
                 continue;
             };
-            if key.trim() != "ps\\eq_names" {
+            if key.trim()
+                != if xbox {
+                    "xbox\\eq_names"
+                } else {
+                    "ps\\eq_names"
+                }
+            {
                 continue;
             }
             let names = qt_list(value);

@@ -2,7 +2,9 @@
 //! Domain rules live in the library; child modules isolate painting and editing.
 mod events;
 use events::proc;
+mod eq_profiles;
 mod equalizer;
+use eq_profiles::*;
 mod layout_editor;
 mod painting;
 mod settings;
@@ -112,7 +114,9 @@ struct App {
     alpha: u8,
     draw_queued: bool,
     telemetry_at: Option<device::Delivery>,
-    applied_blur: Option<bool>,
+    applied_blur: Option<u8>,
+    notification_options: bool,
+    popup_cards: Option<u8>,
     tray_icon: HICON,
     low_latched: bool,
     wheel: i32,
@@ -260,6 +264,8 @@ unsafe fn run() -> Result<()> {
         draw_queued: false,
         telemetry_at: None,
         applied_blur: None,
+        notification_options: false,
+        popup_cards: None,
         tray_icon: HICON::default(),
         low_latched: false,
         wheel: 0,
@@ -351,6 +357,7 @@ fn sample() -> SoundState {
         device: Some("Maxwell 2 ANC".into()),
         connection: Some("USB Dongle".into()),
         status: "Preview · sample data".into(),
+        ..Default::default()
     }
 }
 unsafe extern "system" fn enum_monitor(h: HMONITOR, _: HDC, _: *mut RECT, p: LPARAM) -> BOOL {
@@ -400,6 +407,9 @@ unsafe fn position(app: &App) {
     let r = monitor_rect(app);
     let (w, h) = if app.settings.is_some() {
         (900., 750.)
+    } else if let Some(mask) = app.popup_cards {
+        let popup = app.config.notification_layout(mask);
+        (popup.width as f32, popup.height as f32)
     } else {
         (app.config.width as f32, app.config.height as f32)
     };
@@ -445,6 +455,10 @@ unsafe fn request_draw(app: &mut App) {
 }
 unsafe fn show(app: &mut App, interactive: bool) {
     if interactive {
+        if let Some(controller) = &app.controller {
+            controller.devices_changed();
+        }
+        app.popup_cards = None;
         if app.settings == Some(5) {
             open_eq(app);
         } else if app.config.cards[5].visible {
@@ -461,9 +475,9 @@ unsafe fn show(app: &mut App, interactive: bool) {
         app.settings = None;
         app.edit = false;
     }
-    let blur = app.config.background_blur;
+    let blur = app.config.blur_strength;
     if app.applied_blur != Some(blur) {
-        let _ = crate::platform::blur::apply(app.hwnd, blur);
+        let _ = crate::platform::blur::apply_strength(app.hwnd, blur);
         app.applied_blur = Some(blur);
     }
     let style = WS_EX_TOPMOST
@@ -515,6 +529,9 @@ unsafe fn show(app: &mut App, interactive: bool) {
     }
 }
 unsafe fn hide(app: &mut App) {
+    if !confirm_recording(app) {
+        return;
+    }
     commit_eq_name(app);
     if app.edit {
         finish_layout(app);
@@ -558,6 +575,9 @@ unsafe fn tray(app: &App, op: NOTIFY_ICON_MESSAGE) {
     let _ = Shell_NotifyIconW(op, &n);
 }
 unsafe fn menu(app: &mut App) {
+    if !confirm_recording(app) {
+        return;
+    }
     let Ok(m) = CreatePopupMenu() else { return };
     for (id, s) in [
         (1, "Open"),
@@ -627,7 +647,7 @@ unsafe fn send(app: &mut App, c: Command) {
         receive_eq(app);
         app.note = "Preview — headset unchanged".into();
     } else if app.sound.mix.is_none() {
-        app.note = "Connect and turn on the Maxwell 2 ANC headset.".into();
+        app.note = "Connect and turn on a supported headset.".into();
     } else if let Some(ctrl) = &app.controller {
         ctrl.clear_error();
         let mix = if let Command::Mix(value) = &c {
@@ -662,8 +682,19 @@ unsafe fn set_mix(app: &mut App, p: u8) {
 }
 unsafe fn act(app: &mut App, action: Action, x: f32, y: f32) {
     app.note.clear();
-    if !matches!(action, Action::Record | Action::EndRecord | Action::None) {
-        app.recording = false;
+    if app.recording
+        && matches!(
+            action,
+            Action::Tab(_)
+                | Action::Back
+                | Action::Settings
+                | Action::Edit
+                | Action::Close
+                | Action::EqEditor
+        )
+        && !confirm_recording(app)
+    {
+        return;
     }
     if !matches!(action, Action::Number(_) | Action::None) && !commit_number(app) {
         return;
@@ -673,6 +704,8 @@ unsafe fn act(app: &mut App, action: Action, x: f32, y: f32) {
     }
     match action {
         Action::EqMenu => eq_menu(app),
+        Action::EqProfiles => profile_menu(app),
+        Action::EqSaveNew => save_profile_copy(app),
         Action::EqEditor => { app.settings = Some(5); app.config.settings_page = 5; save(app); show(app, true); },
         Action::EqInspect(slot) => inspect_eq(app, slot),
         Action::EqUse(slot) => { app.eq_editor.preview_slot = None; send(app, Command::EqSelect(slot)); },
@@ -760,6 +793,8 @@ unsafe fn act(app: &mut App, action: Action, x: f32, y: f32) {
         }
         Action::Record => { app.recording = true; app.recorded_key = None; }
         Action::EndRecord => finish_recording(app),
+        Action::DiscardRecord => { app.recording = false; app.recorded_key = None; },
+        Action::NotificationOptions => app.notification_options = !app.notification_options,
         Action::Number(key) => {
             if commit_number(app) { app.number_edit = Some(audeze_overlay::input::NumberDraft::new(key, dashboard::slider(&app.config, key).0 as u32)); }
         }
@@ -794,20 +829,22 @@ fn hit(app: &App, x: f32, y: f32) -> Action {
 }
 unsafe fn changed(app: &mut App) {
     let mut next = app.latest.lock().unwrap().clone();
+    if next.family != app.sound.family
+        || next.transport != app.sound.transport
+        || next.xbox != app.sound.xbox
+    {
+        app.pending_mix = None;
+        app.eq_editor = Default::default();
+        if let Some(family) = next.family {
+            app.config.select_eq_profile(family, next.xbox);
+        }
+    }
     reconcile_mix(&mut app.pending_mix, &mut next);
     let connected_now = app.sound.mix.is_none() && next.mix.is_some();
+    let eq_changed = next.eq_index != app.sound.eq_index;
     let prev = &app.sound;
-    let n = app.config.notify;
-    fn changed_value<T: PartialEq>(old: &Option<T>, new: &Option<T>) -> bool {
-        old.is_some() && new.is_some() && old != new
-    }
-    let popup = (n[0] && changed_value(&prev.mix, &next.mix))
-        || (n[1]
-            && (changed_value(&prev.sidetone, &next.sidetone)
-                || changed_value(&prev.sidetone_level, &next.sidetone_level)))
-        || (n[2] && changed_value(&prev.anc, &next.anc))
-        || (n[3] && changed_value(&prev.noise, &next.noise))
-        || (n[4] && changed_value(&prev.muted, &next.muted));
+    let changed_cards = next.changed_cards(prev, app.config.notify);
+    let popup = changed_cards != 0;
     let low = next
         .battery
         .map(|b| app.config.low_battery > 0 && b <= app.config.low_battery)
@@ -832,7 +869,20 @@ unsafe fn changed(app: &mut App) {
     if connected_now && app.settings == Some(5) {
         open_eq(app);
     }
+    if app.settings.is_none()
+        && app.config.inline_eq
+        && app.config.cards[5].visible
+        && (eq_changed || connected_now)
+    {
+        if let Some(slot) = app.sound.eq_index {
+            inspect_eq(app, slot);
+        }
+    }
     if (popup || alert) && app.config.auto_show && !app.interactive {
+        app.popup_cards = app
+            .config
+            .changed_card_only
+            .then_some(changed_cards | if alert { 1 << 4 } else { 0 });
         show(app, false);
     }
     if IsWindowVisible(app.hwnd).as_bool() {

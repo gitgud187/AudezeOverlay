@@ -39,6 +39,7 @@ pub(super) unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LP
             CONTROL_MESSAGE => 2,
             DRAW | WM_PAINT => 4,
             WM_SIZE => 8,
+            WM_DEVICECHANGE if w.0 == 7 => 16,
             _ => 0,
         };
         state.deferred.set(state.deferred.get() | flag);
@@ -58,9 +59,15 @@ pub(super) unsafe fn flush_deferred(state: &WindowState, hwnd: HWND) {
         (2, CONTROL_MESSAGE),
         (4, DRAW),
         (8, WM_SIZE),
+        (16, WM_DEVICECHANGE),
     ] {
         if flags & flag != 0 {
-            let _ = PostMessageW(Some(hwnd), message, WPARAM(0), LPARAM(0));
+            let _ = PostMessageW(
+                Some(hwnd),
+                message,
+                WPARAM(if message == WM_DEVICECHANGE { 7 } else { 0 }),
+                LPARAM(0),
+            );
         }
     }
 }
@@ -73,6 +80,16 @@ pub(super) unsafe fn dispatch(
     l: LPARAM,
 ) -> Option<LRESULT> {
     match msg {
+        WM_DEVICECHANGE => {
+            // DBT_DEVNODES_CHANGED is broadcast to top-level windows when USB
+            // topology changes. Coalesce it; never enumerate on the UI thread.
+            if w.0 == 7 {
+                if let Some(controller) = &app.controller {
+                    controller.devices_changed();
+                }
+            }
+            Some(LRESULT(0))
+        }
         WM_NCCALCSIZE => Some(LRESULT(0)),
         WM_NCPAINT | WM_ERASEBKGND => Some(LRESULT(1)),
         WM_PAINT => {
@@ -330,7 +347,6 @@ pub(super) unsafe fn dispatch(
         }
         WM_KILLFOCUS => {
             commit_eq_name(app);
-            app.recording = false;
             if !commit_number(app) {
                 app.number_edit = None;
             }
@@ -426,6 +442,9 @@ pub(super) unsafe fn dispatch(
             match l.0 as u32 {
                 WM_RBUTTONUP | WM_CONTEXTMENU => menu(app),
                 WM_LBUTTONDBLCLK => {
+                    if !confirm_recording(app) {
+                        return Some(LRESULT(0));
+                    }
                     app.settings = None;
                     show(app, true)
                 }
@@ -434,6 +453,9 @@ pub(super) unsafe fn dispatch(
             Some(LRESULT(0))
         }
         OPEN => {
+            if !confirm_recording(app) {
+                return Some(LRESULT(0));
+            }
             app.settings = None;
             show(app, true);
             Some(LRESULT(0))

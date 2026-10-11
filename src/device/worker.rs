@@ -50,9 +50,12 @@ fn post(hwnd: isize, msg: u32) {
         }
     }
 }
-fn next_query(due: &[Instant; 11], now: Instant, previous: Option<Query>) -> Option<usize> {
-    let background = (1..7).filter(|i| due[*i] <= now).min_by_key(|i| due[*i]);
-    if due[0] <= now && (previous != Some(Query::Mix) || background.is_none()) {
+fn next_query(due: &[Option<Instant>; 12], now: Instant, previous: Option<Query>) -> Option<usize> {
+    let background = (1..7)
+        .filter(|i| due[*i].is_some_and(|at| at <= now))
+        .min_by_key(|i| due[*i]);
+    if due[0].is_some_and(|at| at <= now) && (previous != Some(Query::Mix) || background.is_none())
+    {
         Some(0)
     } else {
         background
@@ -64,7 +67,7 @@ enum ReadyWork {
     Query(Query),
 }
 fn ready_work(
-    due: &[Instant; 11],
+    due: &[Option<Instant>; 12],
     now: Instant,
     previous: Option<Query>,
     flight: bool,
@@ -80,7 +83,7 @@ fn ready_work(
         Some(ReadyWork::Query(q))
     } else if commands {
         // Saving multiple EQ bands yields to an overdue mix read between bands.
-        if previous == Some(Query::EqBands) && due[0] <= now {
+        if previous == Some(Query::EqBands) && due[0].is_some_and(|at| at <= now) {
             Some(ReadyWork::Query(Query::Mix))
         } else {
             Some(ReadyWork::Write)
@@ -225,7 +228,9 @@ impl Trace {
 pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
     let (tx, rx) = sync_channel(1);
     let c = Controller {
+        topology_changed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         sequence: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        mix_sequence: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         pending: Arc::new(Mutex::new(VecDeque::new())),
         wake: tx,
         error: Arc::new(Mutex::new(None)),
@@ -239,24 +244,53 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
         }
         let mut request_sequence = 0u64;
         let mut delivery_sequence = 0u64;
+        let mut cable_mix = super::cable_mix::CableMix::default();
+        let mut bluetooth = super::bluetooth_status::connected();
         loop {
+            if worker
+                .topology_changed
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
+            {
+                bluetooth = super::bluetooth_status::connected();
+            }
+            let mut retry_after = Duration::from_secs(2);
             let result = (|| -> Result<()> {
                 let mut device = Device::open()?;
-                let mut state = SoundState {
-                    device: Some("Maxwell 2 ANC".into()),
-                    connection: Some("USB Dongle".into()),
-                    ..SoundState::default()
-                };
-                let mut due = [Instant::now(); 11];
+                let mut restore_mix =
+                    cable_mix.reconnect(device.profile, device.usb_cable, Instant::now());
+                let restore_until = Instant::now() + Duration::from_secs(1);
+                let restore_sequence = worker
+                    .mix_sequence
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let mut state = device.initial_state();
+                let mut due = [Some(Instant::now()); 12];
+                for (i, query) in QUERIES.iter().enumerate() {
+                    if !device.profile.supports_query(*query) {
+                        due[i] = None;
+                    }
+                }
                 let mut last_good = Instant::now();
                 let mut waiting: Vec<(Query, Instant, QueuedCommand)> = vec![];
                 let mut flight: Option<(Query, Instant, u64)> = None;
                 let mut write_ready = Instant::now();
                 let mut read_ready = Instant::now();
                 let mut previous = None;
-                let mut pending_readback = None;
+                let mut pending_readback = Some(Query::MaxSidetone);
                 let mut eq_retry: Option<Instant> = None;
                 loop {
+                    if worker
+                        .topology_changed
+                        .swap(false, std::sync::atomic::Ordering::AcqRel)
+                    {
+                        bluetooth = super::bluetooth_status::connected();
+                        let current = Device::open()?;
+                        if !device.same_endpoint(&current) {
+                            retry_after = Duration::from_millis(100);
+                            return Err(
+                                "USB connection changed. Refreshing headset readings…".into()
+                            );
+                        }
+                    }
                     #[cfg(feature = "perf-stats")]
                     super::perf::CYCLES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     while let Ok(sample) = ui_rx.try_recv() {
@@ -295,7 +329,7 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                                         } else {
                                             Duration::from_millis(40)
                                         };
-                                    due[q as usize] = write_ready;
+                                    due[q as usize] = Some(write_ready);
                                     pending_readback = Some(q);
                                     waiting.retain(|(_, _, old)| {
                                         !cmd.command.supersedes(&old.command)
@@ -324,7 +358,7 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                             trace.record_with(
                                 "query_due",
                                 Some(q),
-                                scheduled.saturating_duration_since(due[i]),
+                                scheduled.saturating_duration_since(due[i].unwrap_or(scheduled)),
                                 None,
                                 TraceMeta {
                                     request: Some(request_sequence),
@@ -354,7 +388,7 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                         flight = Some((q, written, request_sequence));
                         previous = Some(q);
                         read_ready = written + Duration::from_millis(25);
-                        due[i] = written + query_interval(q);
+                        due[i] = Some(written + query_interval(q));
                     }
                     let mut updated_fields = 0u16;
                     let mut received = Instant::now();
@@ -521,7 +555,14 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                             // A slow secondary query gets a cooldown instead of
                             // repeatedly occupying the queue ahead of the mix dial.
                             if q != Query::Mix {
-                                due[q as usize] = Instant::now() + Duration::from_secs(1);
+                                due[q as usize] = Some(Instant::now() + query_interval(q));
+                            }
+                            if q == Query::Battery {
+                                state.battery = None;
+                                state_may_have_changed = true;
+                            }
+                            if q == Query::MaxSidetone && state.sidetone_max.is_none() {
+                                due[Query::Level as usize] = None;
                             }
                             flight = None;
                         }
@@ -531,6 +572,32 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                         last_good = Instant::now();
                         if state.status.is_empty() {
                             state.status = "Direct USB · Audeze app not required".into();
+                        }
+                    }
+                    if updated_fields & (1 << Query::Mix as u8) != 0 {
+                        if let Some((_, chat)) = state.mix {
+                            if let Some(target) = restore_mix {
+                                // Only recover the observed firmware default. A new user
+                                // command or non-default physical reading always wins.
+                                if Instant::now() > restore_until
+                                    || (chat != 50 && chat != target)
+                                    || worker
+                                        .mix_sequence
+                                        .load(std::sync::atomic::Ordering::Relaxed)
+                                        != restore_sequence
+                                {
+                                    restore_mix = None;
+                                } else if chat == 50 {
+                                    restore_mix = None;
+                                    worker.restore_mix_if_unchanged(restore_sequence, target);
+                                }
+                            }
+                            cable_mix.observe(
+                                device.profile,
+                                device.usb_cable,
+                                chat,
+                                Instant::now(),
+                            );
                         }
                     }
                     waiting.retain(|(q, started, cmd)| {
@@ -620,7 +687,12 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                         read_ready.min(t + query_timeout(q))
                     } else {
                         let next = if worker.pending.lock().unwrap().is_empty() {
-                            *due[..7].iter().min().unwrap()
+                            due[..7]
+                                .iter()
+                                .flatten()
+                                .copied()
+                                .min()
+                                .unwrap_or_else(|| Instant::now() + Duration::from_secs(1))
                         } else {
                             Instant::now()
                         };
@@ -641,12 +713,20 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
             })();
             if let Err(e) = result {
                 *shared.lock().unwrap() = SoundState {
-                    status: e,
+                    status: if bluetooth.is_some() {
+                        "Bluetooth connected to Windows. Sound controls require a USB cable or dongle.".into()
+                    } else {
+                        e
+                    },
+                    family: bluetooth,
+                    device: bluetooth.map(|family| family.name().into()),
+                    transport: bluetooth.map(|_| crate::model::Connection::Bluetooth),
+                    connection: bluetooth.map(|_| "Bluetooth (Windows)".into()),
                     ..Default::default()
                 };
                 post(hwnd, STATUS_MESSAGE);
                 worker.pending.lock().unwrap().clear();
-                let _ = rx.recv_timeout(Duration::from_secs(2));
+                let _ = rx.recv_timeout(retry_after);
             }
         }
     });
@@ -674,9 +754,22 @@ pub fn command_matches(c: &Command, s: &SoundState) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn unavailable_fields_are_never_scheduled_even_long_after_connecting() {
+        let start = Instant::now();
+        let mut due = [None; 12];
+        due[0] = Some(start);
+        due[Query::Battery as usize] = Some(start + query_interval(Query::Battery));
+        let much_later = start + Duration::from_secs(400 * 24 * 3600);
+        assert_eq!(
+            next_query(&due, much_later, Some(Query::Mix)),
+            Some(Query::Battery as usize)
+        );
+        assert_eq!(next_query(&due, much_later, Some(Query::Battery)), Some(0));
+    }
+    #[test]
     fn eq_write_requires_ack_then_readback_without_changing_mix_timing() {
         let now = Instant::now();
-        let due = [now; 11];
+        let due = [Some(now); 12];
         assert_eq!(
             ready_work(
                 &due,
@@ -710,11 +803,11 @@ mod tests {
     #[test]
     fn eq_saves_yield_to_due_mix_and_eq_is_never_polled_when_idle() {
         let now = Instant::now();
-        let mut due = [now + Duration::from_secs(1); 11];
-        due[7] = now;
-        due[8] = now;
+        let mut due = [Some(now + Duration::from_secs(1)); 12];
+        due[7] = Some(now);
+        due[8] = Some(now);
         assert_eq!(next_query(&due, now, None), None);
-        due[0] = now;
+        due[0] = Some(now);
         assert_eq!(
             ready_work(&due, now, Some(Query::EqBands), false, now, None, true),
             Some(ReadyWork::Query(Query::Mix))
@@ -727,7 +820,7 @@ mod tests {
     #[test]
     fn continuous_commands_get_one_readback_before_the_next_write() {
         let start = Instant::now();
-        let due = [start; 11];
+        let due = [Some(start); 12];
         let mut now = start;
         let mut previous = None;
         let mut operations = vec![];
@@ -843,7 +936,7 @@ mod tests {
     #[test]
     fn overdue_background_reads_cannot_queue_ahead_of_mix() {
         let now = Instant::now();
-        let due = [now - Duration::from_secs(1); 11];
+        let due = [Some(now - Duration::from_secs(1)); 12];
         assert_eq!(next_query(&due, now, Some(Query::Anc)), Some(0));
         let background = next_query(&due, now, Some(Query::Mix)).unwrap();
         assert_ne!(background, 0);
@@ -855,7 +948,7 @@ mod tests {
             ),
             Some(0)
         );
-        let future = [now + Duration::from_secs(1); 11];
+        let future = [Some(now + Duration::from_secs(1)); 12];
         assert_eq!(next_query(&future, now, None), None);
     }
 }

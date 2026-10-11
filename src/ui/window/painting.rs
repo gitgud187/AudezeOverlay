@@ -53,8 +53,12 @@ pub(super) unsafe fn render_frame(app: &mut App, prepare_hidden: bool) {
         .map(|m| m.label.as_str())
         .unwrap_or("Auto");
     let mix = displayed_mix(app);
+    let popup_config = app
+        .popup_cards
+        .map(|mask| app.config.notification_layout(mask));
+    let config = popup_config.as_ref().unwrap_or(&app.config);
     let animation = app.presentation.frame(
-        dashboard::card_boxes(&app.config, w as f32 / scale, h as f32 / scale),
+        dashboard::card_boxes(config, w as f32 / scale, h as f32 / scale),
         &app.sound,
         matches!(app.drag, Drag::Mix),
         app.config.animations
@@ -71,7 +75,7 @@ pub(super) unsafe fn render_frame(app: &mut App, prepare_hidden: bool) {
     }
     let view = View {
         eq_editor: Some(&app.eq_editor),
-        config: &app.config,
+        config,
         sound: &app.sound,
         settings: app.settings,
         edit: app.edit,
@@ -79,6 +83,8 @@ pub(super) unsafe fn render_frame(app: &mut App, prepare_hidden: bool) {
         note: &app.note,
         recording: app.recording,
         recorded_key: app.recorded_key,
+        notification_options: app.notification_options,
+        popup_cards: app.popup_cards,
         number_edit: app.number_edit.as_ref(),
         mix,
         demo: app.demo,

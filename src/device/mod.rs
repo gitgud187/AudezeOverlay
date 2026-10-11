@@ -1,5 +1,8 @@
 //! Direct device integration. UI consumers send commands and receive sound snapshots.
+mod bluetooth_status;
+mod cable_mix;
 pub mod command;
+pub mod profiles;
 mod usb;
 mod worker;
 pub use usb::{parse_frame, Device, Query, QueryUpdates, QUERIES};

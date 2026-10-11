@@ -1,5 +1,21 @@
 //! Settings actions, input drafts, hotkey registration and factory reset.
 use super::*;
+pub(super) unsafe fn confirm_recording(app: &mut App) -> bool {
+    if !app.recording {
+        return true;
+    }
+    let choice = MessageBoxW(Some(app.hwnd), w!("Save the recorded shortcut before leaving?\nYes: save. No: discard. Cancel: keep recording."), w!("Unsaved shortcut"), MB_YESNOCANCEL | MB_ICONQUESTION);
+    if choice == IDYES {
+        finish_recording(app);
+        !app.recording
+    } else if choice == IDNO {
+        app.recording = false;
+        app.recorded_key = None;
+        true
+    } else {
+        false
+    }
+}
 pub(super) unsafe fn commit_number(app: &mut App) -> bool {
     let Some(draft) = app.number_edit.as_ref() else {
         return true;
@@ -43,6 +59,8 @@ pub(super) unsafe fn factory_reset(app: &mut App) {
     app.number_edit = None;
     app.edit = false;
     app.low_latched = false;
+    app.popup_cards = None;
+    app.notification_options = false;
     app.settings = Some(if app.hotkey_registered { 0 } else { 3 });
     app.config.settings_page = app.settings.unwrap();
     app.note = if app.hotkey_registered {
@@ -81,6 +99,12 @@ pub(super) unsafe fn apply_numeric(app: &mut App, key: &'static str, value: f32)
         "text" => c.text_scale = value as u32,
         "background" => c.background_opacity = value as u8,
         "opacity" => c.card_opacity = value as u8,
+        "blur" => {
+            c.blur_strength = value.clamp(0., 100.) as u8;
+            c.background_blur = c.blur_strength > 0;
+            let _ = crate::platform::blur::apply_strength(app.hwnd, c.blur_strength);
+            app.applied_blur = Some(c.blur_strength);
+        }
         "rows" => {
             let min = c
                 .cards
@@ -166,13 +190,21 @@ pub(super) unsafe fn setting(app: &mut App, key: &str, n: i32) {
             c.status_icons = !c.status_icons;
             c.height = (c.height as f32 + c.vertical_padding() - old_padding) as u32;
         }
-        "eq-factory" => c.eq.show_factory = !c.eq.show_factory,
+        "eq-factory" => {
+            c.eq.show_factory = !c.eq.show_factory;
+            if !c.eq.show_factory && app.eq_editor.selected < 6 {
+                inspect_eq(app, 6);
+            }
+        }
         "animations" => c.animations = !c.animations,
+        "preserve-space" => c.preserve_space = !c.preserve_space,
+        "changed-card-only" => c.changed_card_only = !c.changed_card_only,
         "automatic" => c.auto_show = !c.auto_show,
         "blur" => {
             c.background_blur = !c.background_blur;
             let _ = crate::platform::blur::apply(app.hwnd, c.background_blur);
-            app.applied_blur = Some(c.background_blur);
+            c.blur_strength = if c.background_blur { 50 } else { 0 };
+            app.applied_blur = Some(c.blur_strength);
         }
         "notify0" | "notify1" | "notify2" | "notify3" | "notify4" => {
             let i = key.as_bytes()[6] as usize - b'0' as usize;
@@ -231,6 +263,7 @@ pub(super) unsafe fn setting(app: &mut App, key: &str, n: i32) {
         }
         "reset-position" => reset(app),
         "preview" => {
+            app.popup_cards = app.config.changed_card_only.then_some(1);
             app.settings = None;
             show(app, false)
         }

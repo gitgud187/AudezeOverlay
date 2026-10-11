@@ -104,7 +104,9 @@ unsafe fn selected_if_option(e: &IUIAutomationElement, name: &str) -> bool {
 pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
     let (tx, rx) = sync_channel(1);
     let controller = Controller {
+        topology_changed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         sequence: Arc::new(AtomicU64::new(0)),
+        mix_sequence: Arc::new(AtomicU64::new(0)),
         pending: Arc::new(Mutex::new(VecDeque::new())),
         wake: tx,
         error: Arc::new(Mutex::new(None)),
