@@ -29,6 +29,17 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+# Desktop entries cannot represent embedded newlines. Require an absolute prefix
+# so launching from an unrelated working directory always resolves the same app.
+case "$prefix" in
+    /*) ;;
+    *) echo "--prefix must be an absolute path." >&2; exit 2 ;;
+esac
+case "$prefix" in
+    *'
+'*) echo "--prefix cannot contain a newline." >&2; exit 2 ;;
+esac
+
 bin_dir=$prefix/bin
 share=$prefix/share
 autostart=${XDG_CONFIG_HOME:-$HOME/.config}/autostart/$id.desktop
@@ -65,7 +76,21 @@ install -Dm755 "$binary" "$bin_dir/audeze-overlay"
 # ~/.local/bin is not on the desktop's PATH.
 # (Written next to the destination: the source tree may be read-only.)
 mkdir -p "$share/applications"
-sed "s|^Exec=audeze-overlay|Exec=$bin_dir/audeze-overlay|" "$here/$id.desktop" > "$share/applications/$id.desktop"
+OVERLAY_EXEC_PATH="$bin_dir/audeze-overlay" awk '
+    BEGIN {
+        path = ENVIRON["OVERLAY_EXEC_PATH"]
+        escaped = ""
+        for (i = 1; i <= length(path); i++) {
+            c = substr(path, i, 1)
+            if (c == "\\") escaped = escaped "\\\\\\\\"
+            else if (c == "\"" || c == "$" || c == "`") escaped = escaped "\\\\" c
+            else if (c == "%") escaped = escaped "%%"
+            else escaped = escaped c
+        }
+    }
+    /^Exec=/ { print "Exec=\"" escaped "\""; next }
+    { print }
+' "$here/$id.desktop" > "$share/applications/$id.desktop"
 chmod 644 "$share/applications/$id.desktop"
 for size in 48x48 128x128 256x256; do
     install -Dm644 "$here/icons/$size/apps/$id.png" "$share/icons/hicolor/$size/apps/$id.png"

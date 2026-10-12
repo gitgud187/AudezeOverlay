@@ -18,7 +18,7 @@ def main() -> None:
     target = sys.argv[2] if len(sys.argv) > 2 else "x86_64-unknown-linux-gnu"
     metadata = json.loads(
         subprocess.run(
-            ["cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform", target],
+            ["cargo", "metadata", "--offline", "--locked", "--format-version", "1", "--filter-platform", target],
             check=True,
             capture_output=True,
             text=True,

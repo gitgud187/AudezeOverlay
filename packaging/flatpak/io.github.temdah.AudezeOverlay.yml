@@ -36,6 +36,8 @@ modules:
       - install -Dm644 packaging/flatpak/io.github.temdah.AudezeOverlay.metainfo.xml /app/share/metainfo/io.github.temdah.AudezeOverlay.metainfo.xml
       - for size in 48 128 256; do install -Dm644 packaging/linux/icons/${size}x${size}/apps/io.github.temdah.AudezeOverlay.png /app/share/icons/hicolor/${size}x${size}/apps/io.github.temdah.AudezeOverlay.png; done
       - install -Dm644 LICENSE /app/share/licenses/io.github.temdah.AudezeOverlay/LICENSE
+      - install -Dm644 THIRD-PARTY-NOTICES.md /app/share/licenses/io.github.temdah.AudezeOverlay/THIRD-PARTY-NOTICES.md
+      - python3 -I tools/dependency-notices.py /app/share/licenses/io.github.temdah.AudezeOverlay/DEPENDENCY-LICENSES.txt
     sources:
       - type: dir
         path: ../..

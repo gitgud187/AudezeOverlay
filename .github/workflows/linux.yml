@@ -29,7 +29,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends fonts-dejavu-core fontconfig \
             libxkbcommon-dev pkg-config appstream desktop-file-utils \
-            python3-aiohttp python3-tomlkit
+            python3
       - name: Set up Rust
         run: |
           rustup update stable --no-self-update
@@ -47,7 +47,9 @@ jobs:
           desktop-file-validate packaging/linux/io.github.temdah.AudezeOverlay.desktop
           appstreamcli validate --no-net packaging/flatpak/io.github.temdah.AudezeOverlay.metainfo.xml
       - name: Check the Flatpak cargo sources match Cargo.lock
-        run: tools/sync-cargo-sources.sh --check
+        run: |
+          tools/sync-cargo-sources.sh --check
+          python3 -I tools/test-linux-packaging.py
       - name: Build and check rendering without a headset
         run: |
           cargo build --locked --release --bin audeze-overlay --bin preview-layouts --bin verify-direct
