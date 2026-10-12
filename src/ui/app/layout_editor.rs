@@ -1,6 +1,6 @@
 //! Pointer gestures and menus translate into pure grid operations.
 use super::*;
-pub(super) unsafe fn drag(app: &mut App, x: f32, y: f32) {
+pub(in crate::ui) fn drag(app: &mut App, x: f32, y: f32) {
     app.drag_point = (x, y);
     match app.drag {
         Drag::EqBand(index) => set_eq_band(app, index, y),
@@ -52,12 +52,9 @@ pub(super) unsafe fn drag(app: &mut App, x: f32, y: f32) {
                 let mut cards = original_cards;
                 // Respect the work area's size, but make room without a separate window resize.
                 let work = monitor_rect(app);
-                let scale = GetDpiForWindow(app.hwnd).max(96) as f32 / 96.;
-                let max_cols =
-                    (((work.right - work.left) as f32 / scale - 24.) / cw).floor() as i32;
-                let max_rows = (((work.bottom - work.top) as f32 / scale
-                    - app.config.vertical_padding())
-                    / ch)
+                let scale = app.shell.scale();
+                let max_cols = ((work.width() as f32 / scale - 24.) / cw).floor() as i32;
+                let max_rows = ((work.height() as f32 / scale - app.config.vertical_padding()) / ch)
                     .floor() as i32;
                 if layout::resize_pushing(
                     &mut cards,
@@ -75,14 +72,10 @@ pub(super) unsafe fn drag(app: &mut App, x: f32, y: f32) {
                 let target = layout::hovered_card(&original_cards, index, pointer);
                 let now = Instant::now();
                 let swap = app.reorder_hover.update(target, (x, y), now);
-                let _ = KillTimer(Some(app.hwnd), REORDER);
+                app.shell.stop_timer(Timer::Reorder);
                 if let Some(delay) = app.reorder_hover.remaining(now) {
-                    SetTimer(
-                        Some(app.hwnd),
-                        REORDER,
-                        delay.as_millis().max(1) as u32,
-                        None,
-                    );
+                    app.shell
+                        .start_timer(Timer::Reorder, delay.as_millis().max(1) as u32);
                 }
                 let preview = if swap {
                     layout::preview_move_in(&original_cards, index, p, pointer, cols, rows)
@@ -116,18 +109,17 @@ pub(super) unsafe fn drag(app: &mut App, x: f32, y: f32) {
         Drag::None => (),
     }
 }
-pub(super) unsafe fn logical_size(app: &App) -> (f32, f32) {
-    let mut r = RECT::default();
-    let _ = GetClientRect(app.hwnd, &mut r);
-    let s = GetDpiForWindow(app.hwnd).max(96) as f32 / 96.;
-    (r.right as f32 / s, r.bottom as f32 / s)
+pub(in crate::ui) fn logical_size(app: &App) -> (f32, f32) {
+    let (width, height) = app.shell.client_size().unwrap_or((0, 0));
+    let s = app.shell.scale();
+    (width as f32 / s, height as f32 / s)
 }
-pub(super) unsafe fn finish_layout(app: &mut App) {
+pub(in crate::ui) fn finish_layout(app: &mut App) {
     app.drag_preview = None;
-    let _ = KillTimer(Some(app.hwnd), REORDER);
+    app.shell.stop_timer(Timer::Reorder);
     app.edit = false;
     app.drag = Drag::None;
-    let _ = ReleaseCapture();
+    app.shell.release_pointer();
     app.config.trim_canvas();
     save(app);
     if app.settings.is_none() {
@@ -135,7 +127,7 @@ pub(super) unsafe fn finish_layout(app: &mut App) {
     }
     request_draw(app);
 }
-pub(super) unsafe fn card_visibility(app: &mut App, i: usize, visible: bool) {
+pub(in crate::ui) fn card_visibility(app: &mut App, i: usize, visible: bool) {
     if i >= 6 {
         return;
     }
@@ -158,67 +150,41 @@ pub(super) unsafe fn card_visibility(app: &mut App, i: usize, visible: bool) {
     }
     request_draw(app);
 }
-pub(super) unsafe fn card_menu(app: &mut App, index: Option<usize>) {
-    let Ok(menu) = CreatePopupMenu() else { return };
+pub(in crate::ui) fn card_menu(app: &mut App, index: Option<usize>) {
+    let mut entries = vec![];
     if let Some(i) = index {
-        let _ = AppendMenuW(menu, MF_STRING, i + 1, w!("Remove card"));
+        entries.push(MenuEntry::item(i as u32 + 1, "Remove card"));
         if i == 0 {
-            let flags = MF_STRING
-                | if app.config.minimal_cards[i] {
-                    MF_CHECKED
-                } else {
-                    MF_UNCHECKED
-                };
-            let _ = AppendMenuW(menu, flags, 20, w!("Minimal mode — slider"));
+            entries.push(MenuEntry::checkable(
+                20,
+                "Minimal mode — slider",
+                app.config.minimal_cards[i],
+            ));
         }
         if i == 5 {
-            let flags = MF_STRING
-                | if app.config.inline_eq {
-                    MF_CHECKED
-                } else {
-                    MF_UNCHECKED
-                };
-            let _ = AppendMenuW(menu, flags, 21, w!("Mini EQ editor when there is room"));
+            entries.push(MenuEntry::checkable(
+                21,
+                "Mini EQ editor when there is room",
+                app.config.inline_eq,
+            ));
         }
     } else {
-        let mut any = false;
         for (i, card) in app.config.cards.iter().enumerate() {
             if !card.visible {
-                let _ = AppendMenuW(
-                    menu,
-                    MF_STRING,
-                    i + 1,
-                    PCWSTR(wide(layout::NAMES[i]).as_ptr()),
-                );
-                any = true;
+                entries.push(MenuEntry::item(i as u32 + 1, layout::NAMES[i]));
             }
         }
         if !app.config.status_icons {
-            let _ = AppendMenuW(menu, MF_STRING, 7, w!("Status row under logo"));
-            any = true;
+            entries.push(MenuEntry::item(7, "Status row under logo"));
         }
-        if !any {
-            let _ = AppendMenuW(
-                menu,
-                MF_STRING | MF_GRAYED,
-                99,
-                w!("All cards are already shown"),
-            );
+        if entries.is_empty() {
+            entries.push(MenuEntry::disabled("All cards are already shown"));
         }
     }
-    let mut p = POINT::default();
-    let _ = GetCursorPos(&mut p);
-    let id = TrackPopupMenu(
-        menu,
-        TPM_RETURNCMD | TPM_NONOTIFY,
-        p.x,
-        p.y,
-        None,
-        app.hwnd,
-        None,
-    )
-    .0;
-    let _ = DestroyMenu(menu);
+    let id = app
+        .shell
+        .popup_menu(&entries, MenuOrigin::Panel)
+        .unwrap_or(0);
     if id == 20 {
         app.config.minimal_cards[0] = !app.config.minimal_cards[0];
         let mut proposed = app.config.cards[0];

@@ -1,7 +1,7 @@
 //! EQ gestures and native menus; USB work remains on the device worker.
 use super::*;
 
-pub(super) unsafe fn receive_eq(app: &mut App) {
+pub(in crate::ui) fn receive_eq(app: &mut App) {
     if app.sound.mix.is_none() {
         app.eq_editor.failed();
     }
@@ -20,7 +20,7 @@ pub(super) unsafe fn receive_eq(app: &mut App) {
         }
     }
 }
-pub(super) unsafe fn open_eq(app: &mut App) {
+pub(in crate::ui) fn open_eq(app: &mut App) {
     if app.eq_editor.banks.iter().all(Option::is_none) {
         app.eq_editor.selected = app.sound.eq_index.unwrap_or(6);
     }
@@ -30,7 +30,7 @@ pub(super) unsafe fn open_eq(app: &mut App) {
     send(app, Command::EqRefresh);
     inspect_eq(app, app.eq_editor.selected);
 }
-pub(super) unsafe fn inspect_eq(app: &mut App, slot: u8) {
+pub(in crate::ui) fn inspect_eq(app: &mut App, slot: u8) {
     if slot >= 10 {
         return;
     }
@@ -42,7 +42,7 @@ pub(super) unsafe fn inspect_eq(app: &mut App, slot: u8) {
     }
     request_draw(app);
 }
-pub(super) unsafe fn set_eq_band(app: &mut App, index: usize, y: f32) {
+pub(in crate::ui) fn set_eq_band(app: &mut App, index: usize, y: f32) {
     let Some(hit) = app.hits.iter().find(|h| h.action == Action::EqBand(index)) else {
         return;
     };
@@ -51,7 +51,7 @@ pub(super) unsafe fn set_eq_band(app: &mut App, index: usize, y: f32) {
     request_draw(app);
 }
 /// Coalesce repeated edits to the same band; the USB worker owns pacing/readback.
-pub(super) unsafe fn preview_eq_gain(app: &mut App, index: usize, gain: f32) {
+pub(in crate::ui) fn preview_eq_gain(app: &mut App, index: usize, gain: f32) {
     if app.sound.mix.is_none() {
         return;
     }
@@ -75,7 +75,7 @@ pub(super) unsafe fn preview_eq_gain(app: &mut App, index: usize, gain: f32) {
     app.eq_editor.preview_slot = Some(slot);
     send(app, Command::EqGain { slot, band });
 }
-pub(super) unsafe fn save_eq(app: &mut App) {
+pub(in crate::ui) fn save_eq(app: &mut App) {
     if remember_current_profile(app, false) {
         finish_eq_preview(app, false);
         if let Some(bank) = app.eq_editor.selected.checked_sub(6) {
@@ -83,7 +83,7 @@ pub(super) unsafe fn save_eq(app: &mut App) {
         }
     }
 }
-pub(super) unsafe fn discard_eq(app: &mut App) {
+pub(in crate::ui) fn discard_eq(app: &mut App) {
     finish_eq_preview(app, true);
     if let Some(bank) = app.eq_editor.selected.checked_sub(6) {
         if let Some(name) = app.eq_editor.preview_names[bank as usize].take() {
@@ -93,7 +93,7 @@ pub(super) unsafe fn discard_eq(app: &mut App) {
         }
     }
 }
-unsafe fn finish_eq_preview(app: &mut App, discard: bool) {
+fn finish_eq_preview(app: &mut App, discard: bool) {
     if app.sound.mix.is_none() {
         app.note = Notice::UntilConnected("Reconnect the headset to save or restore this tuning.");
         return;
@@ -132,7 +132,7 @@ unsafe fn finish_eq_preview(app: &mut App, discard: bool) {
         receive_eq(app);
     }
 }
-pub(super) unsafe fn commit_eq_name(app: &mut App) {
+pub(in crate::ui) fn commit_eq_name(app: &mut App) {
     if let Some(name) = app.eq_editor.name_edit.take() {
         let slot = app.eq_editor.selected;
         if (6..=9).contains(&slot) && !name.trim().is_empty() {
@@ -141,7 +141,7 @@ pub(super) unsafe fn commit_eq_name(app: &mut App) {
         }
     }
 }
-pub(super) fn type_eq_name(app: &mut App, ch: char) {
+pub(in crate::ui) fn type_eq_name(app: &mut App, ch: char) {
     let Some(text) = app.eq_editor.name_edit.as_mut() else {
         return;
     };
@@ -157,52 +157,27 @@ pub(super) fn type_eq_name(app: &mut App, ch: char) {
         }
     }
 }
-pub(super) unsafe fn eq_menu(app: &mut App) {
+pub(in crate::ui) fn eq_menu(app: &mut App) {
     send(app, Command::EqRefresh);
-    let Ok(menu) = CreatePopupMenu() else {
-        return;
-    };
-    let mut count = 0;
+    let mut entries = vec![];
     for slot in 0..10u8 {
         if app.config.eq.visible(slot) {
-            let flags = MF_STRING
-                | if app.sound.eq_index == Some(slot) {
-                    MF_CHECKED
-                } else {
-                    MF_UNCHECKED
-                };
-            let _ = AppendMenuW(
-                menu,
-                flags,
-                slot as usize + 1,
-                PCWSTR(wide(app.config.eq.name(slot)).as_ptr()),
-            );
-            count += 1;
+            entries.push(MenuEntry::checkable(
+                slot as u32 + 1,
+                app.config.eq.name(slot),
+                app.sound.eq_index == Some(slot),
+            ));
         }
     }
-    if count == 0 {
-        let _ = AppendMenuW(
-            menu,
-            MF_STRING | MF_GRAYED,
-            0,
-            w!("Pin presets in Equalizer settings"),
-        );
+    if entries.is_empty() {
+        entries.push(MenuEntry::disabled("Pin presets in Equalizer settings"));
     }
-    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-    let _ = AppendMenuW(menu, MF_STRING, 20, w!("Edit equalizer…"));
-    let mut p = POINT::default();
-    let _ = GetCursorPos(&mut p);
-    let id = TrackPopupMenu(
-        menu,
-        TPM_RETURNCMD | TPM_NONOTIFY,
-        p.x,
-        p.y,
-        None,
-        app.hwnd,
-        None,
-    )
-    .0;
-    let _ = DestroyMenu(menu);
+    entries.push(MenuEntry::Separator);
+    entries.push(MenuEntry::item(20, "Edit equalizer…"));
+    let id = app
+        .shell
+        .popup_menu(&entries, MenuOrigin::Panel)
+        .unwrap_or(0);
     if (1..=10).contains(&id) {
         send(app, Command::EqSelect((id - 1) as u8));
     } else if id == 20 {

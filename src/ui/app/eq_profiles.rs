@@ -13,7 +13,7 @@ fn current_profile(app: &App) -> std::result::Result<Profile, String> {
     Profile::new(app.config.eq.name(draft.value.slot), draft.value)
 }
 
-unsafe fn store_profile(
+fn store_profile(
     app: &mut App,
     mut profile: Profile,
     replace: Option<usize>,
@@ -37,7 +37,7 @@ unsafe fn store_profile(
     Ok(index)
 }
 
-pub(super) unsafe fn remember_current_profile(app: &mut App, copy: bool) -> bool {
+pub(in crate::ui) fn remember_current_profile(app: &mut App, copy: bool) -> bool {
     let result = (|| {
         let profile = current_profile(app)?;
         let bank = app.eq_editor.selected as usize - 6;
@@ -61,13 +61,13 @@ pub(super) unsafe fn remember_current_profile(app: &mut App, copy: bool) -> bool
         }
     }
 }
-pub(super) unsafe fn save_profile_copy(app: &mut App) {
+pub(in crate::ui) fn save_profile_copy(app: &mut App) {
     remember_current_profile(app, true);
     request_draw(app);
 }
 
-unsafe fn import_profile(app: &mut App) -> std::result::Result<(), String> {
-    let Some(path) = crate::platform::profile_dialog::choose(app.hwnd, false)? else {
+fn import_profile(app: &mut App) -> std::result::Result<(), String> {
+    let Some(path) = app.shell.choose_file(false)? else {
         return Ok(());
     };
     let baseline = app.eq_editor.draft().map(|d| d.value);
@@ -80,15 +80,15 @@ unsafe fn import_profile(app: &mut App) -> std::result::Result<(), String> {
     .into();
     Ok(())
 }
-unsafe fn export_profile(app: &mut App, profile: Profile) -> std::result::Result<(), String> {
-    let Some(path) = crate::platform::profile_dialog::choose(app.hwnd, true)? else {
+fn export_profile(app: &mut App, profile: Profile) -> std::result::Result<(), String> {
+    let Some(path) = app.shell.choose_file(true)? else {
         return Ok(());
     };
     profiles::write(&path, &profile)?;
     app.note = "EQ profile exported. It can be imported on another PC.".into();
     Ok(())
 }
-unsafe fn load_profile(app: &mut App, index: usize) -> std::result::Result<(), String> {
+fn load_profile(app: &mut App, index: usize) -> std::result::Result<(), String> {
     let profile = app
         .config
         .eq_library
@@ -107,12 +107,10 @@ unsafe fn load_profile(app: &mut App, index: usize) -> std::result::Result<(), S
     }
     let target = profile.snapshot(draft.value.slot)?;
     let question = format!("Preview “{}” in {}?\n\nThis changes the sound immediately. Save keeps it on the headset; Discard restores the slot's previous curve. Your saved library profile stays separate.", profile.name, app.config.eq.name(target.slot));
-    if MessageBoxW(
-        Some(app.hwnd),
-        PCWSTR(wide(&question).as_ptr()),
-        w!("Load EQ profile"),
-        MB_YESNO | MB_ICONQUESTION,
-    ) != IDYES
+    if app
+        .shell
+        .confirm("Load EQ profile", &question, Buttons::YesNo)
+        != Choice::Yes
     {
         return Ok(());
     }
@@ -145,56 +143,31 @@ unsafe fn load_profile(app: &mut App, index: usize) -> std::result::Result<(), S
     Ok(())
 }
 
-pub(super) unsafe fn profile_menu(app: &mut App) {
-    let Ok(menu) = CreatePopupMenu() else {
-        return;
-    };
-    let _ = AppendMenuW(menu, MF_STRING, 1, w!("Import from file…"));
+pub(in crate::ui) fn profile_menu(app: &mut App) {
     let ready = app.eq_editor.draft().is_some_and(|d| !d.saving);
-    let flags = MF_STRING | if ready { MF_ENABLED } else { MF_GRAYED };
-    let _ = AppendMenuW(menu, flags, 2, w!("Export current tuning…"));
-    let _ = AppendMenuW(menu, flags, 3, w!("Save current tuning as new profile"));
-    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+    let mut entries = vec![
+        MenuEntry::item(1, "Import from file…"),
+        MenuEntry::item_if(ready, 2, "Export current tuning…"),
+        MenuEntry::item_if(ready, 3, "Save current tuning as new profile"),
+        MenuEntry::Separator,
+    ];
     for (i, profile) in app.config.eq_library.iter().enumerate() {
-        let Ok(child) = CreatePopupMenu() else {
-            continue;
-        };
-        let _ = AppendMenuW(
-            child,
-            flags,
-            1000 + i,
-            w!("Load into selected custom slot…"),
-        );
-        let _ = AppendMenuW(child, MF_STRING, 2000 + i, w!("Export profile…"));
-        let _ = AppendMenuW(child, MF_STRING, 3000 + i, w!("Remove from library…"));
-        let label = profile.name.replace('&', "&&");
-        if AppendMenuW(
-            menu,
-            MF_POPUP | MF_STRING,
-            child.0 as usize,
-            PCWSTR(wide(&label).as_ptr()),
-        )
-        .is_err()
-        {
-            let _ = DestroyMenu(child);
-        }
+        entries.push(MenuEntry::Submenu {
+            label: profile.name.clone(),
+            entries: vec![
+                MenuEntry::item_if(ready, 1000 + i as u32, "Load into selected custom slot…"),
+                MenuEntry::item(2000 + i as u32, "Export profile…"),
+                MenuEntry::item(3000 + i as u32, "Remove from library…"),
+            ],
+        });
     }
     if app.config.eq_library.is_empty() {
-        let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, w!("No saved profiles yet"));
+        entries.push(MenuEntry::disabled("No saved profiles yet"));
     }
-    let mut point = POINT::default();
-    let _ = GetCursorPos(&mut point);
-    let id = TrackPopupMenu(
-        menu,
-        TPM_RETURNCMD | TPM_NONOTIFY,
-        point.x,
-        point.y,
-        None,
-        app.hwnd,
-        None,
-    )
-    .0 as usize;
-    let _ = DestroyMenu(menu);
+    let id = app
+        .shell
+        .popup_menu(&entries, MenuOrigin::Panel)
+        .unwrap_or(0) as usize;
     let result = match id {
         1 => import_profile(app),
         2 => current_profile(app).and_then(|p| export_profile(app, p)),
@@ -215,18 +188,12 @@ pub(super) unsafe fn profile_menu(app: &mut App) {
     }
     request_draw(app);
 }
-unsafe fn remove_profile(app: &mut App, index: usize) -> std::result::Result<(), String> {
+fn remove_profile(app: &mut App, index: usize) -> std::result::Result<(), String> {
     let Some(profile) = app.config.eq_library.get(index) else {
         return Ok(());
     };
     let text = format!("Remove “{}” from this PC's library? Headset slots and exported files will stay as they are.", profile.name);
-    if MessageBoxW(
-        Some(app.hwnd),
-        PCWSTR(wide(&text).as_ptr()),
-        w!("Remove profile"),
-        MB_YESNO | MB_ICONQUESTION,
-    ) != IDYES
-    {
+    if app.shell.confirm("Remove profile", &text, Buttons::YesNo) != Choice::Yes {
         return Ok(());
     }
     let mut config = app.config.clone();

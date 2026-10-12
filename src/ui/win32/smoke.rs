@@ -3,8 +3,8 @@ use super::*;
 pub(super) unsafe fn smoke(app: &mut App) {
     match app.smoke_phase {
         0 => {
-            let state = &*(GetWindowLongPtrW(app.hwnd, GWLP_USERDATA) as *const WindowState);
-            let _ = SendMessageW(app.hwnd, STATUS_MESSAGE, None, None);
+            let state = &*(GetWindowLongPtrW(win(app).hwnd, GWLP_USERDATA) as *const WindowState);
+            let _ = SendMessageW(win(app).hwnd, STATUS_MESSAGE, None, None);
             app.checks.push((
                 "reentrant_status_is_deferred".into(),
                 state.deferred.get() & 1 != 0,
@@ -15,32 +15,32 @@ pub(super) unsafe fn smoke(app: &mut App) {
                 .push(("popup_keeps_focus".into(), GetForegroundWindow() == fg));
             app.checks.push((
                 "popup_click_through".into(),
-                GetWindowLongPtrW(app.hwnd, GWL_EXSTYLE) as u32 & WS_EX_TRANSPARENT.0 != 0,
+                GetWindowLongPtrW(win(app).hwnd, GWL_EXSTYLE) as u32 & WS_EX_TRANSPARENT.0 != 0,
             ));
             app.config.duration_ms = 100;
-            SetTimer(Some(app.hwnd), HOLD, 100, None);
+            SetTimer(Some(win(app).hwnd), HOLD, 100, None);
         }
         8 => {
             app.sound = sample();
             app.checks.push((
                 "popup_fades_and_hides".into(),
-                !IsWindowVisible(app.hwnd).as_bool(),
+                !IsWindowVisible(win(app).hwnd).as_bool(),
             ));
             show(app, true);
             app.checks.push((
                 "interactive_open".into(),
-                GetWindowLongPtrW(app.hwnd, GWL_EXSTYLE) as u32 & WS_EX_TRANSPARENT.0 == 0,
+                GetWindowLongPtrW(win(app).hwnd, GWL_EXSTYLE) as u32 & WS_EX_TRANSPARENT.0 == 0,
             ));
             app.alpha = 255;
             app.fade_in = None;
             render(app);
-            let bitmap = app.bitmap.as_ref().map(|b| b.bitmap);
+            let bitmap = win(app).frame_surface();
             let raster = app.raster.as_ref().map(|p| p.data().as_ptr());
             render(app);
             app.checks.push((
                 "animation_reuses_bitmap_and_raster".into(),
                 bitmap.is_some()
-                    && bitmap == app.bitmap.as_ref().map(|b| b.bitmap)
+                    && bitmap == win(app).frame_surface()
                     && raster == app.raster.as_ref().map(|p| p.data().as_ptr()),
             ));
             // Multiple status/UI requests before the next animation tick keep
@@ -49,15 +49,15 @@ pub(super) unsafe fn smoke(app: &mut App) {
             app.last_frame = Some(Instant::now());
             let rendered = app.last_frame;
             app.draw_queued = true;
-            let _ = events::dispatch(app, app.hwnd, DRAW, WPARAM(0), LPARAM(0));
-            let _ = events::dispatch(app, app.hwnd, DRAW, WPARAM(0), LPARAM(0));
+            let _ = events::dispatch(app, win(app).hwnd, DRAW, WPARAM(0), LPARAM(0));
+            let _ = events::dispatch(app, win(app).hwnd, DRAW, WPARAM(0), LPARAM(0));
             app.checks.push((
                 "animation_coalesces_draws_until_tick".into(),
                 app.last_frame == rendered && app.draw_queued && app.animation_timer,
             ));
             app.smoke = true;
             app.mix_started = None;
-            let _ = events::dispatch(app, app.hwnd, WM_TIMER, WPARAM(TICK), LPARAM(0));
+            let _ = events::dispatch(app, win(app).hwnd, WM_TIMER, WPARAM(TICK), LPARAM(0));
             app.checks.push((
                 "animation_timer_stops_after_final_pending_frame".into(),
                 !app.draw_queued && !app.animation_timer && app.last_frame != rendered,
@@ -75,14 +75,14 @@ pub(super) unsafe fn smoke(app: &mut App) {
                 !app.note.is_empty(),
             ));
             *app.latest.lock().unwrap() = live;
-            let _ = events::dispatch(app, app.hwnd, STATUS_MESSAGE, WPARAM(0), LPARAM(0));
+            let _ = events::dispatch(app, win(app).hwnd, STATUS_MESSAGE, WPARAM(0), LPARAM(0));
             app.checks.push((
                 "reconnect_clears_notice_and_queues_draw_without_click".into(),
                 app.note.is_empty() && app.sound.mix.is_some() && app.draw_queued,
             ));
             app.note = "Could not save settings: test failure".into();
             app.sound.mix = None;
-            let _ = events::dispatch(app, app.hwnd, STATUS_MESSAGE, WPARAM(0), LPARAM(0));
+            let _ = events::dispatch(app, win(app).hwnd, STATUS_MESSAGE, WPARAM(0), LPARAM(0));
             app.checks.push((
                 "reconnect_preserves_unrelated_failure".into(),
                 app.note.text() == "Could not save settings: test failure",
@@ -91,7 +91,7 @@ pub(super) unsafe fn smoke(app: &mut App) {
             *app.latest.lock().unwrap() = previous_latest;
             render(app);
             let region = CreateRectRgn(0, 0, 0, 0);
-            let shape = GetWindowRgn(app.hwnd, region);
+            let shape = GetWindowRgn(win(app).hwnd, region);
             app.checks.push((
                 "rounded_window_region_is_set".into(),
                 shape != GDI_REGION_TYPE(0)
@@ -101,30 +101,39 @@ pub(super) unsafe fn smoke(app: &mut App) {
             let _ = DeleteObject(region.into());
             app.checks.push((
                 "audeze_tray_icon_created".into(),
-                !app.tray_icon.is_invalid(),
+                !win(app).tray_icon.is_invalid(),
             ));
             app.checks.push((
                 "tray_registered_with_shell".into(),
                 app.tray_registration.registered,
             ));
-            tray(app, NIM_DELETE);
-            let _ = events::dispatch(app, app.hwnd, app.taskbar, WPARAM(0), LPARAM(0));
+            app.shell.tray_remove();
+            let _ = events::dispatch(
+                app,
+                win(app).hwnd,
+                win(app).taskbar_message,
+                WPARAM(0),
+                LPARAM(0),
+            );
             app.checks.push((
                 "tray_restored_after_taskbar_created".into(),
                 app.tray_registration.registered && !app.tray_registration.can_retry(),
             ));
-            let scale = GetDpiForWindow(app.hwnd).max(96) as f32 / 96.;
+            let scale = GetDpiForWindow(win(app).hwnd).max(96) as f32 / 96.;
             let mut header = POINT {
                 x: (210. * scale) as i32,
                 y: (35. * scale) as i32,
             };
-            let _ = ClientToScreen(app.hwnd, &mut header);
+            let _ = ClientToScreen(win(app).hwnd, &mut header);
             let point =
                 LPARAM(((header.x as u16 as u32) | ((header.y as u16 as u32) << 16)) as isize);
-            let caption = events::dispatch(app, app.hwnd, WM_NCHITTEST, WPARAM(0), point).unwrap();
+            let caption =
+                events::dispatch(app, win(app).hwnd, WM_NCHITTEST, WPARAM(0), point).unwrap();
             app.checks.push((
                 "transparent_header_drags_without_edit_mode".into(),
-                !app.edit && WindowFromPoint(header) == app.hwnd && caption.0 == HTCAPTION as isize,
+                !app.edit
+                    && WindowFromPoint(header) == win(app).hwnd
+                    && caption.0 == HTCAPTION as isize,
             ));
             act(app, Action::Edit, 0., 0.);
             app.checks.push(("layout_editor".into(), app.edit));
@@ -442,7 +451,7 @@ pub(super) unsafe fn smoke(app: &mut App) {
             app.config.position = Some((-30000, -30000));
             app.recording = true;
             app.recorded_key = Some((2, 0x24));
-            events::dispatch(app, app.hwnd, WM_KILLFOCUS, WPARAM(0), LPARAM(0));
+            events::dispatch(app, win(app).hwnd, WM_KILLFOCUS, WPARAM(0), LPARAM(0));
             app.checks.push((
                 "shortcut_draft_survives_focus_loss".into(),
                 app.recording && app.recorded_key == Some((2, 0x24)),
@@ -467,19 +476,21 @@ pub(super) unsafe fn smoke(app: &mut App) {
             ));
             reset(app);
             let mut r = RECT::default();
-            let _ = GetWindowRect(app.hwnd, &mut r);
+            let _ = GetWindowRect(win(app).hwnd, &mut r);
             app.checks.push((
                 "position_recovery".into(),
                 r.left > -10000 && r.top > -10000,
             ));
         }
+        #[cfg(feature = "golden-checks")]
+        9 => golden::run(app),
         10 => {
             let _ = std::fs::create_dir_all("diagnostics");
             let _ = std::fs::write(
                 "diagnostics/smoke-v3.json",
                 serde_json::to_vec_pretty(&app.checks).unwrap(),
             );
-            let _ = DestroyWindow(app.hwnd);
+            let _ = DestroyWindow(win(app).hwnd);
         }
         _ => (),
     };
