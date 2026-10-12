@@ -38,7 +38,13 @@ struct Reports {
 impl Reports {
     fn largest(bits: &BTreeMap<u8, u64>) -> usize {
         bits.iter()
-            .map(|(id, bits)| bits.div_ceil(8) as usize + usize::from(*id != 0))
+            // An unrepresentable length must stay too large for transport
+            // validation, including on 32-bit hosts; never truncate it.
+            .map(|(id, bits)| {
+                usize::try_from(bits.div_ceil(8))
+                    .unwrap_or(usize::MAX)
+                    .saturating_add(usize::from(*id != 0))
+            })
             .max()
             .unwrap_or(0)
     }
@@ -84,7 +90,10 @@ pub(super) fn collections(descriptor: &[u8]) -> Vec<Collection> {
             // Global: usage page, report size, report ID, report count, push, pop.
             (1, 0) => globals.usage_page = value,
             (1, 7) => globals.report_size = value,
-            (1, 8) => globals.report_id = value as u8,
+            (1, 8) => match u8::try_from(value) {
+                Ok(id) if id != 0 => globals.report_id = id,
+                _ => break,
+            },
             (1, 9) => globals.report_count = value,
             (1, 10) => stack.push(globals),
             (1, 11) => globals = stack.pop().unwrap_or(globals),
@@ -133,7 +142,13 @@ pub(super) fn collections(descriptor: &[u8]) -> Vec<Collection> {
                     } else {
                         &mut reports.output
                     };
-                    *target.entry(globals.report_id).or_default() += bits;
+                    let count = target.entry(globals.report_id).or_default();
+                    let Some(total) = count.checked_add(bits) else {
+                        // Do not return the incomplete collection with a
+                        // wrapped length that could pass interface selection.
+                        break;
+                    };
+                    *count = total;
                 }
                 first_usage = None;
             }
@@ -227,5 +242,29 @@ mod tests {
             .collect();
         let _ = collections(&noise);
         assert!(collections(&[]).is_empty());
+    }
+
+    #[test]
+    fn overflowing_report_lengths_discard_only_the_incomplete_collection() {
+        let malformed = [
+            0x06, 0x13, 0xff, 0x09, 0x01, 0xa1, 0x01, 0x85, 0x07, 0x77, 0xff, 0xff, 0xff, 0xff,
+            0x97, 0xff, 0xff, 0xff, 0xff, 0x81, 0x02, 0x81, 0x02, 0xc0,
+        ];
+        assert!(collections(&malformed).is_empty());
+        let mut descriptor = MAXWELL_XBOX_DONGLE.to_vec();
+        descriptor.extend_from_slice(&malformed);
+        assert_eq!(collections(&descriptor), collections(&MAXWELL_XBOX_DONGLE));
+    }
+
+    #[test]
+    fn invalid_report_ids_cannot_alias_a_control_report() {
+        for id in [0u16, 263] {
+            let [low, high] = id.to_le_bytes();
+            let descriptor = [
+                0x06, 0x13, 0xff, 0x09, 0x01, 0xa1, 0x01, 0x86, low, high, 0x75, 8, 0x95, 61, 0x81,
+                2, 0xc0,
+            ];
+            assert!(collections(&descriptor).is_empty());
+        }
     }
 }
