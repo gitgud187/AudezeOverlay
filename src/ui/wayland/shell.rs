@@ -161,8 +161,8 @@ impl Core {
     fn adopt_output_scale(&mut self) {
         if let Some(preferred) = self.preferred_scale {
             self.scale = preferred;
-        } else if let Some(i) = self.output {
-            self.scale = self.outputs[i].scale.max(1) as f32;
+        } else if let Some(output) = self.output.and_then(|i| self.outputs.get(i)) {
+            self.scale = output.scale.max(1) as f32;
         } else if let Some(max) = self.outputs.iter().map(|o| o.scale).max() {
             self.scale = max.max(1) as f32;
         }
@@ -176,13 +176,36 @@ impl Core {
         changed
     }
 
-    pub(super) fn outputs_changed(&mut self) {
+    pub(super) fn outputs_changed(&mut self, outputs: Vec<Output>) {
+        let previous = self
+            .output
+            .and_then(|i| self.outputs.get(i))
+            .map(|o| o.handle.clone());
+        self.output = retained_output(previous.as_ref(), outputs.iter().map(|o| &o.handle));
+        let changed = previous.as_ref() != self.output.map(|i| &outputs[i].handle);
+        self.outputs = outputs;
+        if changed {
+            self.destroy_surface();
+        }
         self.adopt_output_scale();
+        self.ensure_surface();
+    }
+
+    pub(super) fn surface_closed(&mut self, layer: &LayerSurface) {
+        // Ignore a late close for an old surface after moving monitors. A closed
+        // current surface can be recreated on the next output event or show.
+        if self
+            .layer
+            .as_ref()
+            .is_some_and(|current| current.wl_surface() == layer.wl_surface())
+        {
+            self.destroy_surface();
+        }
     }
 
     /// Creates the layer surface if the window is meant to be showing.
     fn ensure_surface(&mut self) {
-        if self.layer.is_some() || !self.visible {
+        if self.layer.is_some() || !self.visible || self.outputs.is_empty() {
             return;
         }
         let surface = self.compositor.create_surface(&self.qh);
@@ -602,11 +625,15 @@ impl Shell for WlShell {
         let core = self.core.borrow();
         let index = match point {
             Some((x, y)) => core.output_at(x, y),
-            None => core.output.or(if core.outputs.is_empty() {
-                None
-            } else {
-                Some(0)
-            }),
+            None => {
+                core.output
+                    .filter(|i| *i < core.outputs.len())
+                    .or(if core.outputs.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    })
+            }
         };
         index.map_or_else(Rect::default, |i| core.output_rect(i))
     }
@@ -635,8 +662,35 @@ impl Shell for WlShell {
             _ => Choice::Cancel,
         }
     }
-    fn choose_file(&mut self, save: bool) -> Result<Option<PathBuf>, String> {
-        super::portal::choose_file(save)
+    fn choose_file(&mut self, save: bool) -> Result<FileSelection, String> {
+        use smithay_client_toolkit::reexports::calloop::channel;
+        // Exactly one reply, from one outstanding dialog. The application owns
+        // the pending action and rejects a second request until this finishes.
+        let (sender, receiver) = channel::channel::<Result<Option<PathBuf>, String>>();
+        let registration = Rc::new(std::cell::Cell::new(None));
+        let cleanup = registration.clone();
+        let token = self
+            .handle
+            .insert_source(receiver, move |event, _, state: &mut State| {
+                if let channel::Event::Msg(result) = event {
+                    if let Some(token) = cleanup.take() {
+                        state.loop_handle.remove(token);
+                    }
+                    crate::ui::app::profile_file_selected(&mut state.app, result);
+                }
+            })
+            .map_err(|e| format!("Could not start the file dialog: {e}"))?;
+        registration.set(Some(token));
+        if let Err(error) = std::thread::Builder::new()
+            .name("eq-file-dialog".into())
+            .spawn(move || {
+                let _ = sender.send(super::portal::choose_file(save));
+            })
+        {
+            self.handle.remove(token);
+            return Err(format!("Could not start the file dialog: {error}"));
+        }
+        Ok(FileSelection::Pending)
     }
     fn register_hotkey(&mut self, modifiers: u32, key: u32) -> bool {
         // One portal session lives for the whole run; the desktop owns the binding.
@@ -669,4 +723,33 @@ impl Shell for WlShell {
         super::autostart::set(enabled)
     }
     fn shutdown(&mut self) {}
+}
+
+/// Retain monitor identity across enumeration changes, falling back only when
+/// that monitor disappeared. Never reuse an index from the previous list.
+fn retained_output<'a, T: PartialEq + 'a>(
+    previous: Option<&T>,
+    outputs: impl Iterator<Item = &'a T>,
+) -> Option<usize> {
+    let mut first = None;
+    for (index, output) in outputs.enumerate() {
+        first.get_or_insert(index);
+        if previous == Some(output) {
+            return Some(index);
+        }
+    }
+    first
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::retained_output;
+
+    #[test]
+    fn monitor_identity_survives_removal_and_reordering() {
+        assert_eq!(retained_output(Some(&"B"), ["B", "A"].iter()), Some(0));
+        assert_eq!(retained_output(Some(&"B"), ["A"].iter()), Some(0));
+        assert_eq!(retained_output(Some(&"B"), [].iter()), None);
+        assert_eq!(retained_output(None, ["C"].iter()), Some(0));
+    }
 }

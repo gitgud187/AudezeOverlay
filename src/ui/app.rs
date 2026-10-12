@@ -54,6 +54,7 @@ pub(in crate::ui) struct App {
     pub(in crate::ui) shell: Box<dyn Shell>,
     pub(in crate::ui) config: Config,
     pub(in crate::ui) eq_editor: audeze_overlay::eq::Editor,
+    pending_profile_file: Option<eq_profiles::ProfileFile>,
     pub(in crate::ui) sound: SoundState,
     pub(in crate::ui) latest: Arc<Mutex<SoundState>>,
     pub(in crate::ui) controller: Option<Controller>,
@@ -133,6 +134,7 @@ impl App {
             monitors: shell.monitors(),
             config,
             eq_editor: audeze_overlay::eq::Editor::default(),
+            pending_profile_file: None,
             sound: if demo {
                 sample()
             } else {

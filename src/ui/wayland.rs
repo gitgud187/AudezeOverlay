@@ -11,13 +11,10 @@ mod portal;
 mod scaling;
 mod shell;
 mod shortcut;
+mod signals;
 mod tray;
 use super::{app::*, draw::Painter, shell::*};
-use audeze_overlay::{
-    config::Config,
-    device::{self, command::Signal},
-    model::SoundState,
-};
+use audeze_overlay::{config::Config, device, model::SoundState};
 use shell::{Core, Output, WlShell};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -126,14 +123,11 @@ fn run() -> Result<(), String> {
         instance::Request::Open
     };
     let socket = instance::socket_path().filter(|_| !demo);
-    let listener = match &socket {
+    let instance = match &socket {
         Some(path) => match instance::acquire(path, request) {
             Ok(instance::Role::Forwarded) => return Ok(()),
-            Ok(instance::Role::Primary(listener)) => Some(listener),
-            Err(error) => {
-                eprintln!("Running without single-instance handling: {error}");
-                None
-            }
+            Ok(instance::Role::Primary(instance)) => Some(instance),
+            Err(error) => return Err(format!("single-instance startup failed: {error}")),
         },
         None => None,
     };
@@ -232,7 +226,11 @@ fn run() -> Result<(), String> {
         })
         .map_err(|e| format!("event loop ({e})"))?;
 
-    if let Some(listener) = listener {
+    if let Some(instance) = &instance {
+        let listener = instance
+            .listener
+            .try_clone()
+            .map_err(|e| format!("instance socket ({e})"))?;
         handle
             .insert_source(
                 Generic::new(listener, Interest::READ, Mode::Level),
@@ -266,21 +264,26 @@ fn run() -> Result<(), String> {
             }
         })
         .map_err(|e| format!("event loop ({e})"))?;
-    let (sender, receiver) = channel::channel::<Signal>();
+    let pending = Arc::new(signals::Pending::default());
+    let received = pending.clone();
+    let (worker_ping, receiver) = ping::make_ping().map_err(|e| format!("worker ping ({e})"))?;
     handle
-        .insert_source(receiver, |event, _, state: &mut State| {
-            if let channel::Event::Msg(signal) = event {
-                match signal {
-                    Signal::Status => status_changed(&mut state.app),
-                    Signal::Control => command_finished(&mut state.app),
-                }
+        .insert_source(receiver, move |_, _, state: &mut State| {
+            let (status, control) = received.take();
+            if status {
+                status_changed(&mut state.app);
+            }
+            if control {
+                command_finished(&mut state.app);
             }
         })
         .map_err(|e| format!("event loop ({e})"))?;
     if !demo {
         state.app.controller = Some(device::start(
             move |signal| {
-                let _ = sender.send(signal);
+                if pending.push(signal) {
+                    worker_ping.ping();
+                }
             },
             latest,
         ));
@@ -321,9 +324,6 @@ fn run() -> Result<(), String> {
         })
         .map_err(|e| format!("event loop ({e})"))?;
     state.app.shell.shutdown();
-    if let Some(path) = &socket {
-        let _ = std::fs::remove_file(path);
-    }
     Ok(())
 }
 
@@ -368,8 +368,7 @@ impl State {
             .collect();
         {
             let mut core = self.core.borrow_mut();
-            core.outputs = outputs;
-            core.outputs_changed();
+            core.outputs_changed(outputs);
         }
         displays_changed(&mut self.app);
     }
@@ -517,9 +516,9 @@ impl OutputHandler for State {
 }
 
 impl LayerShellHandler for State {
-    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
+    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
         // The compositor took the surface away, for example with its screen.
-        self.core.borrow_mut().quit = true;
+        self.core.borrow_mut().surface_closed(layer);
     }
     fn configure(
         &mut self,

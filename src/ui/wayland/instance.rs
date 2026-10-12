@@ -3,7 +3,9 @@
 //! --toggle` bound to a compositor key shows or hides the panel of the running
 //! instance.
 use std::{
+    fs::{File, OpenOptions},
     io::{Read, Write},
+    os::unix::fs::OpenOptionsExt,
     os::unix::net::{UnixListener, UnixStream},
     path::{Path, PathBuf},
     time::Duration,
@@ -34,9 +36,23 @@ impl Request {
 
 pub(super) enum Role {
     /// This process is the running instance and listens for requests.
-    Primary(UnixListener),
+    Primary(Instance),
     /// The request was delivered to the instance that is already running.
     Forwarded,
+}
+
+/// Keep the advisory lock for the listener's entire lifetime. The lock file is
+/// never unlinked: replacing its inode would let simultaneous owners through.
+pub(super) struct Instance {
+    pub listener: UnixListener,
+    _lock: File,
+    path: PathBuf,
+}
+
+impl Drop for Instance {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 /// Where the socket lives: inside the sandbox's own runtime directory in a
@@ -54,22 +70,44 @@ pub(super) fn socket_path() -> Option<PathBuf> {
 
 /// Delivers `request` to a running instance, or becomes the running instance.
 pub(super) fn acquire(path: &Path, request: Request) -> std::io::Result<Role> {
-    for _ in 0..2 {
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path.with_extension("lock"))?;
+    let owns_lock =
+        match rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => true,
+            Err(rustix::io::Errno::WOULDBLOCK) => false,
+            Err(error) => return Err(error.into()),
+        };
+    // The winner can hold the lock briefly before binding its socket. A bounded
+    // retry forwards to it instead of removing a live socket or starting USB twice.
+    for attempt in 0..20 {
         if let Ok(mut stream) = UnixStream::connect(path) {
             stream.set_write_timeout(Some(Duration::from_millis(500)))?;
             stream.write_all(request.word().as_bytes())?;
             return Ok(Role::Forwarded);
         }
-        // Nothing answered: the file is stale or absent. Another launch racing
-        // us may bind first, which the second connection attempt catches.
-        let _ = std::fs::remove_file(path);
-        match UnixListener::bind(path) {
-            Ok(listener) => {
-                listener.set_nonblocking(true)?;
-                return Ok(Role::Primary(listener));
+        if owns_lock {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
-            Err(error) => return Err(error),
+            let listener = UnixListener::bind(path)?;
+            let instance = Instance {
+                listener,
+                _lock: lock,
+                path: path.to_owned(),
+            };
+            instance.listener.set_nonblocking(true)?;
+            return Ok(Role::Primary(instance));
+        }
+        if attempt < 19 {
+            std::thread::sleep(Duration::from_millis(25));
         }
     }
     Err(std::io::Error::other(
@@ -103,7 +141,7 @@ mod tests {
     #[test]
     fn the_first_launch_runs_and_a_second_hands_over_its_request() {
         let path = temp_socket("handover");
-        let Role::Primary(listener) = acquire(&path, Request::Open).unwrap() else {
+        let Role::Primary(instance) = acquire(&path, Request::Open).unwrap() else {
             panic!("the first launch must become the running instance");
         };
         assert!(matches!(
@@ -112,7 +150,7 @@ mod tests {
         ));
         // The listener is non-blocking; the request is already queued.
         let (stream, _) = loop {
-            match listener.accept() {
+            match instance.listener.accept() {
                 Ok(connection) => break connection,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(Duration::from_millis(5))
@@ -122,6 +160,40 @@ mod tests {
         };
         assert_eq!(read_request(stream), Some(Request::Toggle));
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn concurrent_launches_have_exactly_one_owner() {
+        let path = temp_socket("race");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let role = acquire(&path, Request::Open).unwrap();
+                    barrier.wait(); // Retain the winner until all clients have connected.
+                    role
+                })
+            })
+            .collect();
+        let roles: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        assert_eq!(
+            roles
+                .iter()
+                .filter(|r| matches!(r, Role::Primary(_)))
+                .count(),
+            1
+        );
+        assert!(path.exists());
+        drop(roles);
+        assert!(!path.exists());
+        assert!(matches!(
+            acquire(&path, Request::Open).unwrap(),
+            Role::Primary(_)
+        ));
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
