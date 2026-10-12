@@ -1,6 +1,5 @@
 pub mod config;
 pub mod device;
-pub mod hid_listener;
 pub mod input;
 pub mod layout;
 #[cfg(feature = "legacy-uia")]

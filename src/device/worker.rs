@@ -1,8 +1,11 @@
 //! Maxwell 2 ANC USB-dongle sound protocol. Only the observed sound commands
 //! are exposed, including bounded custom EQ edits. No firmware or arbitrary commands.
-use super::usb::{Device, Query, QUERIES};
+use super::{
+    protocol::{Query, QUERIES},
+    usb::Device,
+};
 use crate::{
-    device::command::{Command, Controller, QueuedCommand, CONTROL_MESSAGE, STATUS_MESSAGE},
+    device::command::{Command, Controller, QueuedCommand, Signal},
     model::SoundState,
 };
 use std::{
@@ -14,7 +17,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use windows::Win32::{Foundation::*, UI::WindowsAndMessaging::*};
 type Result<T> = std::result::Result<T, String>;
 #[derive(Clone, Copy, Debug)]
 pub struct Delivery {
@@ -41,13 +43,6 @@ pub fn trace_present(delivery: Delivery, alpha: u8, chat: Option<u8>) {
             alpha,
             chat,
         });
-    }
-}
-fn post(hwnd: isize, msg: u32) {
-    if hwnd != 0 {
-        unsafe {
-            let _ = PostMessageW(Some(HWND(hwnd as _)), msg, WPARAM(0), LPARAM(0));
-        }
     }
 }
 fn next_query(due: &[Option<Instant>; 12], now: Instant, previous: Option<Query>) -> Option<usize> {
@@ -225,7 +220,12 @@ impl Trace {
         );
     }
 }
-pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
+/// Starts the device worker. `notify` runs on the worker thread after the shared
+/// state or a command result changes, so it must return quickly and never block.
+pub fn start(
+    notify: impl Fn(Signal) + Send + 'static,
+    shared: Arc<Mutex<SoundState>>,
+) -> Controller {
     let (tx, rx) = sync_channel(1);
     let c = Controller {
         topology_changed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -344,7 +344,7 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                                         state_may_have_changed = true;
                                     }
                                     *worker.error.lock().unwrap() = Some(e);
-                                    post(hwnd, CONTROL_MESSAGE);
+                                    notify(Signal::Control);
                                 }
                             }
                         }
@@ -625,7 +625,7 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                             }
                             *worker.error.lock().unwrap() =
                                 Some("The headset did not confirm that change. Try again.".into());
-                            post(hwnd, CONTROL_MESSAGE);
+                            notify(Signal::Control);
                             false
                         } else {
                             true
@@ -683,7 +683,7 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                                     },
                                 );
                             }
-                            post(hwnd, STATUS_MESSAGE);
+                            notify(Signal::Status);
                         } else {
                             drop(out);
                         }
@@ -736,7 +736,7 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
                 }
                 drop(current);
                 if changed {
-                    post(hwnd, STATUS_MESSAGE);
+                    notify(Signal::Status);
                 }
                 worker.pending.lock().unwrap().clear();
                 let _ = rx.recv_timeout(retry_after);

@@ -70,7 +70,7 @@ fn main() -> Result<(), String> {
 fn worker() -> Result<(), String> {
     use std::sync::{Arc, Mutex};
     let shared = Arc::new(Mutex::new(SoundState::default()));
-    let controller = audeze_overlay::device::start(0, shared.clone());
+    let controller = audeze_overlay::device::start(|_| {}, shared.clone());
     let wait = |ready: &dyn Fn(&SoundState) -> bool| -> Result<SoundState, String> {
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(3) {

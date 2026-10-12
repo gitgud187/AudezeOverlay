@@ -132,6 +132,19 @@ struct App {
     smoke_phase: u8,
     checks: Vec<(String, bool)>,
 }
+/// Delivers worker signals as the window messages the event handler expects.
+/// Posting to a destroyed window fails harmlessly, so no lifetime is shared.
+fn worker_signal(hwnd: isize) -> impl Fn(device::command::Signal) + Send + 'static {
+    move |signal| {
+        let message = match signal {
+            device::command::Signal::Status => STATUS_MESSAGE,
+            device::command::Signal::Control => CONTROL_MESSAGE,
+        };
+        unsafe {
+            let _ = PostMessageW(Some(HWND(hwnd as _)), message, WPARAM(0), LPARAM(0));
+        }
+    }
+}
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
@@ -329,7 +342,7 @@ unsafe fn run() -> Result<()> {
         }
         ensure_tray(&mut app);
         if !demo {
-            app.controller = Some(device::start(hwnd.0 as isize, latest));
+            app.controller = Some(device::start(worker_signal(hwnd.0 as isize), latest));
         }
         if smoke {
             SetTimer(Some(hwnd), 3, 50, None);

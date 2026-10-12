@@ -16,7 +16,7 @@ fn main() -> Result<(), String> {
         return Err("Requires --set-mix-20-80; this test changes the headset mix to 20/80.".into());
     }
     let shared = Arc::new(Mutex::new(SoundState::default()));
-    let controller = device::start(0, shared.clone());
+    let controller = device::start(|_| {}, shared.clone());
     let start = Instant::now();
     let mut initialized = false;
     let mut before = SoundState::default();

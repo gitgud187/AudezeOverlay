@@ -1,4 +1,5 @@
 //! One outstanding HID input read. Windows sleeps until a report or timeout.
+use crate::device::InputStream;
 use windows::{
     core::PCWSTR,
     Win32::{
@@ -8,7 +9,7 @@ use windows::{
     },
 };
 
-pub struct InputListener {
+pub(super) struct InputListener {
     handle: HANDLE,
     event: HANDLE,
     // Both allocations must remain at stable addresses until I/O completes.
@@ -17,7 +18,7 @@ pub struct InputListener {
     pending: bool,
 }
 impl InputListener {
-    pub(crate) fn open(path: &[u16], len: usize) -> Result<Self, String> {
+    pub(super) fn open(path: &[u16], len: usize) -> Result<Self, String> {
         unsafe {
             let handle = CreateFileW(
                 PCWSTR(path.as_ptr()),
@@ -48,7 +49,7 @@ impl InputListener {
             })
         }
     }
-    pub fn read(&mut self, timeout_ms: u32) -> Result<Option<Vec<u8>>, String> {
+    fn read(&mut self, timeout_ms: u32) -> Result<Option<Vec<u8>>, String> {
         unsafe {
             if !self.pending {
                 ResetEvent(self.event).map_err(|e| e.to_string())?;
@@ -94,5 +95,10 @@ impl Drop for InputListener {
             let _ = CloseHandle(self.handle);
             let _ = CloseHandle(self.event);
         }
+    }
+}
+impl InputStream for InputListener {
+    fn read(&mut self, timeout_ms: u32) -> Result<Option<Vec<u8>>, String> {
+        InputListener::read(self, timeout_ms)
     }
 }

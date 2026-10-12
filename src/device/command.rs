@@ -7,9 +7,20 @@ use std::{
         Arc, Mutex,
     },
 };
-use windows::Win32::UI::WindowsAndMessaging::WM_APP;
-pub const STATUS_MESSAGE: u32 = WM_APP + 1;
-pub const CONTROL_MESSAGE: u32 = WM_APP + 5;
+/// What the worker reports to the application. How a signal reaches the event
+/// loop (window message, channel, wake-up) is the application's decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Signal {
+    /// The shared sound snapshot changed.
+    Status,
+    /// A queued command finished or failed; see `Controller::last_error`.
+    Control,
+}
+/// Window messages the Windows shell uses to carry a [`Signal`]: WM_APP (0x8000) + n.
+#[cfg(windows)]
+pub const STATUS_MESSAGE: u32 = 0x8000 + 1;
+#[cfg(windows)]
+pub const CONTROL_MESSAGE: u32 = 0x8000 + 5;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Mix(u8),
@@ -48,7 +59,7 @@ pub struct Controller {
     pub(crate) error: Arc<Mutex<Option<String>>>,
 }
 impl Controller {
-    /// Coalesce Windows device-change broadcasts; enumeration stays on the worker.
+    /// Coalesce device-change notifications; enumeration stays on the worker.
     pub fn devices_changed(&self) {
         self.topology_changed.store(true, Ordering::Release);
         let _ = self.wake.try_send(());

@@ -74,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(30)
         .clamp(5, 300);
     let state = Arc::new(Mutex::new(SoundState::default()));
-    let _controller = device::start(0, state.clone());
+    let _controller = device::start(|_| {}, state.clone());
     let warm = Instant::now();
     loop {
         let ready = {
