@@ -97,4 +97,25 @@ mod tests {
             assert!(p.supports_command(&super::super::command::Command::EqSelect(6)));
         }
     }
+
+    #[test]
+    fn the_linux_udev_rule_lists_exactly_the_recognized_products() {
+        let rule = include_str!("../../packaging/linux/70-audeze-overlay.rules");
+        let listed: std::collections::BTreeSet<u16> = rule
+            .split(r#"ATTRS{idProduct}=="#)
+            .nth(1)
+            .and_then(|rest| rest.trim_start_matches('"').split('"').next())
+            .expect("the rule matches on product IDs")
+            .split('|')
+            .map(|id| u16::from_str_radix(id, 16).expect("hexadecimal product ID"))
+            .collect();
+        let recognized: std::collections::BTreeSet<u16> = (0..=u16::MAX)
+            .filter(|product| Profile::from_usb(0x3329, *product).is_some())
+            .collect();
+        assert_eq!(
+            listed, recognized,
+            "docs/LINUX.md promises exactly these devices"
+        );
+        assert!(rule.contains(r#"ATTRS{idVendor}=="3329""#));
+    }
 }

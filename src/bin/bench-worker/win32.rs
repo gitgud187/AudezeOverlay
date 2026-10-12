@@ -64,7 +64,7 @@ fn cpu_ms() -> windows::core::Result<f64> {
     let ticks = |t: FILETIME| ((t.dwHighDateTime as u64) << 32) | t.dwLowDateTime as u64;
     Ok((ticks(kernel) + ticks(user)) as f64 / 10000.)
 }
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seconds = std::env::args()
         .skip(1)
         .find_map(|a| {

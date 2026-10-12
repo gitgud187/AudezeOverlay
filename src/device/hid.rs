@@ -7,6 +7,17 @@ use super::profiles::Profile;
 use super::selection::Candidate;
 type Result<T> = std::result::Result<T, String>;
 
+/// HID usage page and usage of the vendor control collection, the same on every
+/// supported model and platform.
+pub(super) const CONTROL_USAGE: (u32, u32) = (0xff13, 1);
+
+/// Whether a control collection's largest input and output reports (bytes, report
+/// ID included) are plausible for this protocol. Both transports apply the same
+/// bounds, so a malformed descriptor is rejected identically everywhere.
+pub(super) fn control_report_sizes_plausible(input: usize, output: usize) -> bool {
+    (1..=512).contains(&input) && (62..=512).contains(&output)
+}
+
 /// An opened control interface. Dropping it releases the platform handle.
 pub(super) trait Hid {
     /// Sends one complete output report, report ID first, of exactly the
@@ -44,8 +55,18 @@ mod win32;
 #[cfg(windows)]
 pub(super) use win32::enumerate;
 
-/// No transport exists for this platform yet.
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub(super) use linux::{enumerate, watch_hotplug};
+
+/// No transport exists for this platform.
+#[cfg(not(any(windows, target_os = "linux")))]
 pub(super) fn enumerate() -> Result<Enumeration> {
-    Err("Direct headset access is not available on this platform yet.".into())
+    Err("Direct headset access is not available on this platform.".into())
 }
+
+/// Windows learns about device changes from window messages, which the shell
+/// forwards to `Controller::devices_changed`; there is nothing to watch here.
+#[cfg(not(target_os = "linux"))]
+pub(super) fn watch_hotplug(_on_change: impl Fn() + Send + 'static) {}

@@ -15,7 +15,7 @@ use windows::{
         UI::{Accessibility::*, WindowsAndMessaging::*},
     },
 };
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     unsafe {
         let all_controls = std::env::args().any(|a| a == "--all-and-restore");
         if !all_controls && !std::env::args().any(|a| a == "--mix-and-restore") {

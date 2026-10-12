@@ -11,17 +11,17 @@ perf-stats = []
 
 [[bin]]
 name = "bench-worker"
-path = "src/bin/bench-worker.rs"
+path = "src/bin/bench-worker/main.rs"
 required-features = ["perf-stats"]
 
 [[bin]]
 name = "verify-controls"
-path = "src/bin/verify-controls.rs"
+path = "src/bin/verify-controls/main.rs"
 required-features = ["legacy-uia"]
 
 [[bin]]
 name = "watch-audeze"
-path = "src/bin/watch-audeze.rs"
+path = "src/bin/watch-audeze/main.rs"
 required-features = ["legacy-uia"]
 
 [dependencies]
@@ -37,6 +37,10 @@ svgtypes = "0.16.1"
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Registry", "Win32_System_Variant", "Win32_System_Ole", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Controls_Dialogs", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_HiDpi", "Win32_Storage_FileSystem", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_Bluetooth", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Security", "Win32_System_IO"] }
 windows-core = "0.62"
 hidapi = { version = "2.6.7", default-features = false, features = ["windows-native"] }
+
+# Linux talks to the kernel's hidraw, poll and netlink interfaces directly.
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1", features = ["event", "fs", "net"] }
 
 [build-dependencies]
 embed-resource = "3.0.11"

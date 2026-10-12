@@ -257,7 +257,17 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
             if i == 2 && !stacked {
                 // Reserve each complete label first. Fixed proportional widths
                 // clipped Transparency even when the row had enough total room.
-                for (size, pad) in [(16., 6.), (16., 3.), (14., 2.), (14., 1.)] {
+                // The smaller steps only apply to fonts wider than Segoe UI; the loop
+                // stops at the first size that fits, so narrower fonts are unaffected.
+                for (size, pad) in [
+                    (16., 6.),
+                    (16., 3.),
+                    (14., 2.),
+                    (14., 1.),
+                    (12., 1.),
+                    (11., 0.),
+                    (10., 0.),
+                ] {
                     font_size = size;
                     padding = pad;
                     if measure(size).iter().sum::<f32>() + pad * 6. + 20. <= inner.w {

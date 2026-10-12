@@ -1,0 +1,54 @@
+name: Linux build and checks
+
+# Checks only. Nothing here publishes a release or replaces a download; Windows
+# packaging and releases stay in windows.yml.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install system packages
+        # DejaVu is the fallback UI font when fontconfig names none.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-dejavu-core fontconfig
+      - name: Set up Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add rustfmt clippy
+      - name: Check formatting, lints and tests
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all-targets --all-features
+      - name: Validate the udev rule
+        run: udevadm verify packaging/linux/70-audeze-overlay.rules
+      - name: Build and check rendering without a headset
+        run: |
+          cargo build --locked --release --bin audeze-overlay --bin preview-layouts --bin verify-direct
+          target/release/preview-layouts
+      - name: Upload layout previews
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: layout-previews-linux
+          path: diagnostics/layout-*.png
+          if-no-files-found: ignore
+          retention-days: 14

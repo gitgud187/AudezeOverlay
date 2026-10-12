@@ -4,7 +4,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-fn main() {
+pub fn main() {
     let shared = Arc::new(Mutex::new(SoundState::default()));
     telemetry::start(0, shared.clone());
     let start = Instant::now();

@@ -16,7 +16,11 @@ official Audeze application. Dependencies point toward data and domain rules.
 | Preferences | Defaults, migrations, bounds, persistence | `src/config.rs` |
 | Device commands | Typed commands, bounded/coalesced queue, error interface | `src/device/command.rs` |
 | Device profiles | Explicit USB identities, model capabilities and control routing | `src/device/profiles.rs` |
-| USB protocol | Device access, packet framing, parsing | `src/device/usb.rs` |
+| Wire protocol | Query types, response framing and frame parsing; pure, no device access | `src/device/protocol.rs` |
+| Device selection | Choosing the one control interface to use; ambiguous models or duplicates are rejected | `src/device/selection.rs` |
+| Device session | Sound commands, polling and reply handling over one HID interface | `src/device/usb.rs` |
+| HID transport | Per-platform enumeration and report I/O: Win32, and Linux hidraw with hot-plug | `src/device/hid.rs`, `src/device/hid/` |
+| Report descriptors | Finding the vendor control collection in a HID report descriptor | `src/device/descriptor.rs` |
 | USB scheduling | Worker thread, reads, acknowledgments, reconnects, tracing | `src/device/worker.rs` |
 | Raster drawing | Pixels, cached font glyphs, vector logo and primitives | `src/ui/draw.rs` |
 | Views | Read-only state to pixels and hit regions | `src/ui/view/` |

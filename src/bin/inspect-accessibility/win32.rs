@@ -66,7 +66,7 @@ unsafe fn dump(hwnd: HWND) -> Result<()> {
     }
     Ok(())
 }
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     unsafe {
         CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
         let pid = std::env::args().nth(1).unwrap().parse::<isize>().unwrap();
