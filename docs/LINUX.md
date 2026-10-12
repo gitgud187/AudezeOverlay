@@ -3,8 +3,8 @@
 [Back to documentation](README.md)
 
 > **Status: experimental.** The Linux build is a native Wayland application with
-> the same overlay, controls and EQ as Windows. It is verified on one headset and
-> one desktop (below). There is no Linux release download yet; CI builds a test
+> the same overlay, controls and EQ as Windows. Contributor testing covers one
+> headset and one desktop (below). There is no Linux release download yet; CI builds a test
 > archive for each push.
 
 ## What you get
@@ -30,7 +30,7 @@ directly: no driver, no daemon and no libudev.
 
 ## Install
 
-From a release archive (or the CI artifact), or a source checkout after
+From the experimental CI archive, or a source checkout after
 `cargo build --release`:
 
 ```sh
@@ -55,7 +55,9 @@ shortcut settings (on Sway or Hyprland, a keybinding that runs the command).
 
 `packaging/flatpak/` holds a manifest built the way Flathub requires: offline,
 from vendored Cargo sources (`tools/sync-cargo-sources.sh` regenerates them and CI
-checks they match `Cargo.lock`). Build and run it locally:
+checks they match `Cargo.lock`). The generator uses Python 3.11+ and the committed
+lockfile; it does not download or execute an external generator. Both Linux
+packages include the application and dependency license notices. Build and run it locally:
 
 ```sh
 flatpak-builder --user --install --force-clean build-dir packaging/flatpak/io.github.temdah.AudezeOverlay.yml
@@ -77,11 +79,13 @@ Only one device has been tested on Linux:
 | --- | --- | --- |
 | Audeze Maxwell, Xbox dongle (`3329:4b18`) | headset and dongle v1.0.1.74 | Status reads, game/chat mix, noise filter, sidetone on/off, sidetone level and EQ preset selection were each changed, read back and restored. An unplug and replug was detected and the dongle was found again. |
 
-Tested on Fedora 44 (kernel 7.2) under KDE Plasma 6 on Wayland, with a person at the
+The contributor reports testing on Fedora 44 (kernel 7.2) under KDE Plasma 6 on Wayland, with a person at the
 headset: the overlay, popups, menus, tray, global shortcut, launch at login,
-blur and the Flatpak build were used by hand on that machine. Fractional scaling
-and the other compositors were only exercised in a headless Sway session, and
-GNOME is untested.
+blur and the Flatpak build were used by hand on that machine. Additional scaling
+checks used headless Sway; this does not verify other compositors or physical
+monitor hot-plug. Maintainer review ran automated Linux CI and Windows UI checks,
+not a second Linux hardware validation. GNOME is untested and lacks the required
+layer-shell protocol.
 The unit tests use synthetic fixtures and are not hardware evidence. Nothing here
 establishes support for other models, wired use, PlayStation dongles, other
 firmware, or Maxwell 2 and Maxwell 2 ANC (including ANC and custom EQ editing) on

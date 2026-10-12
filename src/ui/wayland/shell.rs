@@ -638,8 +638,6 @@ impl Shell for WlShell {
         index.map_or_else(Rect::default, |i| core.output_rect(i))
     }
 
-    // Autostart is the next piece of this shell; until it exists it reports that it
-    // did nothing.
     fn popup_menu(&mut self, entries: &[MenuEntry], origin: MenuOrigin) -> Option<u32> {
         // A menu belongs to the window; one asked for from the tray icon has no
         // window to attach to, and the tray provides its own menu.

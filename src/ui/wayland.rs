@@ -524,10 +524,13 @@ impl LayerShellHandler for State {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &LayerSurface,
+        layer: &LayerSurface,
         configure: LayerSurfaceConfigure,
         _: u32,
     ) {
+        if !self.is_window(layer.wl_surface()) {
+            return;
+        }
         self.core
             .borrow_mut()
             .configured_size(configure.new_size.0, configure.new_size.1);

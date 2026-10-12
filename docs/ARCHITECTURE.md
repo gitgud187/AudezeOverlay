@@ -122,6 +122,13 @@ as an ordinary CI test.
 
 ## EQ data ownership
 
+On Wayland, file chooser portals run on a dedicated thread and return one result
+to the UI loop. The application retains one pending import/export action and its
+original tuning until completion or cancellation. Worker status and completion
+notifications are coalesced into two flags, so a modal menu cannot accumulate an
+unbounded queue. Menus and confirmations remain modal; the headset worker keeps
+running and the latest snapshot is consumed when the menu closes.
+
 The headset owns four custom EQ banks. `SoundState` carries the latest read bank,
 while `eq::Editor` keeps up to four independent drafts in the UI. Loading another
 bank never overwrites an unsaved draft. Live gestures emit coalesced band commands.
