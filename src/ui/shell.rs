@@ -7,9 +7,12 @@
 //!
 //! Menus and confirmations are modal. File selection can finish immediately or
 //! deliver a later result on the UI loop, keeping portal waits off that loop.
-use std::{any::Any, path::PathBuf};
+use std::any::Any;
+#[cfg(any(windows, test))]
+use std::path::PathBuf;
 
 pub enum FileSelection {
+    #[cfg(any(windows, test))]
     Ready(Option<PathBuf>),
     #[cfg(any(target_os = "linux", test))]
     Pending,
@@ -56,6 +59,7 @@ pub enum Timer {
     /// Retries tray registration while the desktop shell starts.
     TrayRetry,
     /// Steps the opt-in native self-test.
+    #[cfg(windows)]
     SelfTest,
 }
 
@@ -102,6 +106,7 @@ pub enum Region {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuOrigin {
     Panel,
+    #[cfg(windows)]
     TrayIcon,
 }
 
@@ -163,7 +168,9 @@ pub enum Choice {
 
 pub trait Shell: Any {
     /// Lets platform-specific code (and only that) reach its own shell type.
+    #[cfg(any(windows, test))]
     fn as_any(&self) -> &dyn Any;
+    #[cfg(windows)]
     fn as_any_mut(&mut self) -> &mut dyn Any;
 
     // ---- Timers and redraw requests.

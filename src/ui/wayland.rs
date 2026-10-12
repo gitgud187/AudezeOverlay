@@ -588,6 +588,8 @@ impl SeatHandler for State {
             }
         }
         if capability == Capability::Pointer {
+            self.drag = None;
+            pointer_capture_lost(&mut self.app);
             if let Some(pointer) = self.pointer.take() {
                 pointer.release();
             }
@@ -761,7 +763,8 @@ impl RelativePointerHandler for State {
         match drag {
             WindowDrag::Move => self.core.borrow_mut().nudge(dx, dy),
             WindowDrag::Resize(edge) => {
-                self.core.borrow_mut().resize_by(*edge, dx, dy);
+                let limits = size_limits(&self.app);
+                self.core.borrow_mut().resize_by(*edge, dx, dy, limits);
                 resized(&mut self.app);
             }
         }

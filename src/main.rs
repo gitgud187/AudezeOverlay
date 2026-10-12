@@ -1,6 +1,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 #[cfg(windows)]
 mod platform;
+#[cfg(any(windows, target_os = "linux"))]
 mod ui;
 
 #[cfg(any(windows, target_os = "linux"))]

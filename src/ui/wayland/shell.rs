@@ -28,7 +28,9 @@ use smithay_client_toolkit::{
     },
     shm::slot::SlotPool,
 };
-use std::{any::Any, cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc, time::Duration};
+#[cfg(test)]
+use std::any::Any;
+use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc, time::Duration};
 
 /// A screen as the compositor describes it, in logical (unscaled) coordinates.
 pub(super) struct Output {
@@ -277,40 +279,34 @@ impl Core {
     }
 
     /// Resizes the window by a pointer drag; edges on the left or top also move it.
-    pub(super) fn resize_by(&mut self, edge: Edge, dx: i32, dy: i32) {
-        let (mut w, mut h) = (self.logical.0 as i32, self.logical.1 as i32);
-        let (mut left, mut top) = self.margin;
-        let (grow_left, grow_right, grow_top, grow_bottom) = match edge {
-            Edge::Left => (true, false, false, false),
-            Edge::Right => (false, true, false, false),
-            Edge::Top => (false, false, true, false),
-            Edge::Bottom => (false, false, false, true),
-            Edge::TopLeft => (true, false, true, false),
-            Edge::TopRight => (false, true, true, false),
-            Edge::BottomLeft => (true, false, false, true),
-            Edge::BottomRight => (false, true, false, true),
+    pub(super) fn resize_by(
+        &mut self,
+        edge: Edge,
+        dx: i32,
+        dy: i32,
+        limits: ((i32, i32), (i32, i32)),
+    ) {
+        let logical_limit = |(w, h): (i32, i32)| {
+            (
+                (w as f32 / self.scale).ceil() as i32,
+                (h as f32 / self.scale).ceil() as i32,
+            )
         };
-        if grow_left {
-            w -= dx;
-            left += dx;
-        }
-        if grow_right {
-            w += dx;
-        }
-        if grow_top {
-            h -= dy;
-            top += dy;
-        }
-        if grow_bottom {
-            h += dy;
-        }
-        self.logical = (w.max(1) as u32, h.max(1) as u32);
-        self.margin = (left, top);
+        let rect = Rect {
+            left: self.margin.0,
+            top: self.margin.1,
+            right: self.margin.0 + self.logical.0 as i32,
+            bottom: self.margin.1 + self.logical.1 as i32,
+        };
+        let resized = resized_rect(
+            rect,
+            edge,
+            (dx, dy),
+            (logical_limit(limits.0), logical_limit(limits.1)),
+        );
+        self.logical = (resized.width() as u32, resized.height() as u32);
+        self.margin = (resized.left, resized.top);
         self.apply_geometry();
-    }
-
-    pub(super) fn logical_size(&self) -> (u32, u32) {
-        self.logical
     }
 
     /// The compositor decided on a size.
@@ -319,10 +315,6 @@ impl Core {
             self.logical = (width, height);
         }
         self.configured = true;
-    }
-
-    pub(super) fn is_configured(&self) -> bool {
-        self.configured
     }
 
     /// Copies the stored frame into a shared-memory buffer at the current
@@ -439,10 +431,8 @@ impl WlShell {
 }
 
 impl Shell for WlShell {
+    #[cfg(test)]
     fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 
@@ -638,12 +628,8 @@ impl Shell for WlShell {
         index.map_or_else(Rect::default, |i| core.output_rect(i))
     }
 
-    fn popup_menu(&mut self, entries: &[MenuEntry], origin: MenuOrigin) -> Option<u32> {
-        // A menu belongs to the window; one asked for from the tray icon has no
-        // window to attach to, and the tray provides its own menu.
-        if origin == MenuOrigin::TrayIcon {
-            return None;
-        }
+    fn popup_menu(&mut self, entries: &[MenuEntry], _: MenuOrigin) -> Option<u32> {
+        // The Linux tray hosts its own menu through StatusNotifierItem.
         match Core::run_modal(&self.core, Content::Menu(entries.to_vec()))? {
             Outcome::Menu(id) => id,
             Outcome::Dialog(_) => None,
@@ -720,7 +706,9 @@ impl Shell for WlShell {
     fn set_autostart(&mut self, enabled: bool) -> Result<(), String> {
         super::autostart::set(enabled)
     }
-    fn shutdown(&mut self) {}
+    fn shutdown(&mut self) {
+        self.tray_remove();
+    }
 }
 
 /// Retain monitor identity across enumeration changes, falling back only when
@@ -749,5 +737,64 @@ mod output_tests {
         assert_eq!(retained_output(Some(&"B"), ["A"].iter()), Some(0));
         assert_eq!(retained_output(Some(&"B"), [].iter()), None);
         assert_eq!(retained_output(None, ["C"].iter()), Some(0));
+    }
+}
+
+/// Clamp the dragged edges while retaining the opposite edge as the anchor.
+fn resized_rect(
+    rect: Rect,
+    edge: Edge,
+    (dx, dy): (i32, i32),
+    (minimum, maximum): ((i32, i32), (i32, i32)),
+) -> Rect {
+    let left = matches!(edge, Edge::Left | Edge::TopLeft | Edge::BottomLeft);
+    let right = matches!(edge, Edge::Right | Edge::TopRight | Edge::BottomRight);
+    let top = matches!(edge, Edge::Top | Edge::TopLeft | Edge::TopRight);
+    let bottom = matches!(edge, Edge::Bottom | Edge::BottomLeft | Edge::BottomRight);
+    let width = if left {
+        rect.width().saturating_sub(dx)
+    } else if right {
+        rect.width().saturating_add(dx)
+    } else {
+        rect.width()
+    }
+    .clamp(minimum.0.max(1), maximum.0.max(minimum.0).max(1));
+    let height = if top {
+        rect.height().saturating_sub(dy)
+    } else if bottom {
+        rect.height().saturating_add(dy)
+    } else {
+        rect.height()
+    }
+    .clamp(minimum.1.max(1), maximum.1.max(minimum.1).max(1));
+    let x = if left { rect.right - width } else { rect.left };
+    let y = if top { rect.bottom - height } else { rect.top };
+    Rect {
+        left: x,
+        top: y,
+        right: x + width,
+        bottom: y + height,
+    }
+}
+
+#[cfg(test)]
+mod resize_tests {
+    use super::*;
+
+    #[test]
+    fn dragging_stops_at_limits_without_moving_the_opposite_edge() {
+        let rect = Rect {
+            left: 100,
+            top: 50,
+            right: 500,
+            bottom: 350,
+        };
+        let limits = ((250, 200), (800, 600));
+        let small = resized_rect(rect, Edge::TopLeft, (1000, 1000), limits);
+        assert_eq!((small.width(), small.height()), limits.0);
+        assert_eq!((small.right, small.bottom), (rect.right, rect.bottom));
+        let large = resized_rect(rect, Edge::BottomRight, (10000, 10000), limits);
+        assert_eq!((large.width(), large.height()), limits.1);
+        assert_eq!((large.left, large.top), (rect.left, rect.top));
     }
 }

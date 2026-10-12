@@ -88,6 +88,7 @@ fn choose_profile_file(app: &mut App, action: ProfileFile) -> Result<(), String>
     let save = matches!(action, ProfileFile::Export(_));
     app.pending_profile_file = Some(action);
     match app.shell.choose_file(save) {
+        #[cfg(any(windows, test))]
         Ok(FileSelection::Ready(path)) => profile_file_selected(app, Ok(path)),
         #[cfg(any(target_os = "linux", test))]
         Ok(FileSelection::Pending) => {}

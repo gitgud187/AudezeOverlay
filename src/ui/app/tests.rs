@@ -68,6 +68,7 @@ impl Shell for Fake {
     fn as_any(&self) -> &dyn Any {
         self
     }
+    #[cfg(windows)]
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }

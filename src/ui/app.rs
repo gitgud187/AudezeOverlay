@@ -98,7 +98,9 @@ pub(in crate::ui) struct App {
     pub(in crate::ui) low_latched: bool,
     pub(in crate::ui) wheel: i32,
     pub(in crate::ui) smoke: bool,
+    #[cfg(windows)]
     pub(in crate::ui) smoke_phase: u8,
+    #[cfg(windows)]
     pub(in crate::ui) checks: Vec<(String, bool)>,
 }
 
@@ -184,7 +186,9 @@ impl App {
             low_latched: false,
             wheel: 0,
             smoke,
+            #[cfg(windows)]
             smoke_phase: 0,
+            #[cfg(windows)]
             checks: vec![],
             shell,
         }
@@ -397,6 +401,7 @@ pub(in crate::ui) fn tray_command(app: &mut App, command: TrayCommand) {
     }
 }
 
+#[cfg(windows)]
 pub(in crate::ui) fn menu(app: &mut App) {
     if !confirm_recording(app) {
         return;

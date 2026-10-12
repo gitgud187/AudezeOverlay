@@ -33,7 +33,6 @@ use smithay_client_toolkit::{
             window::{Window, WindowConfigure, WindowHandler},
             XdgPositioner, XdgShell,
         },
-        WaylandSurface,
     },
     shm::{slot::SlotPool, Shm, ShmHandler},
 };
