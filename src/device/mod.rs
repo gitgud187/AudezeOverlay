@@ -10,7 +10,7 @@ mod bluetooth_status {
 }
 mod cable_mix;
 pub mod command;
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 mod descriptor;
 mod hid;
 pub mod profiles;

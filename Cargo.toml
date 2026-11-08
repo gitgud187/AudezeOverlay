@@ -51,6 +51,13 @@ ksni = { version = "0.3", default-features = false, features = ["async-io", "blo
 rustix = { version = "1.1", features = ["event", "fs", "net"] }
 smithay-client-toolkit = "0.21"
 
+# macOS presents one IOHIDDevice per USB interface, including the vendor control
+# collection, and exposes its report descriptor. IOKit is reached directly, as
+# hidraw is on Linux.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+
 [build-dependencies]
 embed-resource = "3.0.11"
 

@@ -60,13 +60,18 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub(super) use linux::{enumerate, watch_hotplug};
 
+#[cfg(target_os = "macos")]
+mod mac;
+#[cfg(target_os = "macos")]
+pub(super) use mac::{enumerate, watch_hotplug};
+
 /// No transport exists for this platform.
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub(super) fn enumerate() -> Result<Enumeration> {
     Err("Direct headset access is not available on this platform.".into())
 }
 
 /// Windows learns about device changes from window messages, which the shell
 /// forwards to `Controller::devices_changed`; there is nothing to watch here.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(super) fn watch_hotplug(_on_change: impl Fn() + Send + 'static) {}
