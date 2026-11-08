@@ -20,10 +20,13 @@ use core_foundation_sys::{
         CFRunLoopTimerInvalidate, CFRunLoopTimerRef, CFRunLoopWakeUp,
     },
 };
-use objc2::{runtime::AnyObject, MainThreadMarker};
+use objc2::{
+    define_class, msg_send, rc::Retained, runtime::AnyObject, MainThreadMarker, MainThreadOnly,
+};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSScreen,
-    NSScreenSaverWindowLevel, NSView, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSCursor, NSEvent,
+    NSEventModifierFlags, NSScreen, NSScreenSaverWindowLevel, NSView, NSWindow,
+    NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CFData, CFRetained};
 use objc2_core_graphics::{
@@ -147,6 +150,7 @@ fn run() -> Result<()> {
         ));
     }
 
+    app.finishLaunching();
     show(&mut state.app, true);
     app.run();
     STATE.with(|cell| cell.set(ptr::null_mut()));
@@ -154,10 +158,285 @@ fn run() -> Result<()> {
     Ok(())
 }
 
+fn with_state_value<R>(action: impl FnOnce(&mut State) -> R) -> Option<R> {
+    let state = STATE.with(Cell::get);
+    if state.is_null() {
+        None
+    } else {
+        // SAFETY: the pointer is set in `run` and cleared before `State` drops.
+        Some(action(unsafe { &mut *state }))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ResizeDrag {
+    edge: Edge,
+    start: NSPoint,
+    frame: NSRect,
+}
+
+thread_local! {
+    static RESIZE: Cell<Option<ResizeDrag>> = const { Cell::new(None) };
+}
+
+define_class!(
+    // SAFETY: NSView has no subclassing requirements that this type violates,
+    // and the view is only ever used on the main thread.
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "AudezeOverlayView"]
+    struct OverlayView;
+
+    impl OverlayView {
+        #[unsafe(method(isFlipped))]
+        fn is_flipped(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method(acceptsFirstResponder))]
+        fn accepts_first_responder(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method(acceptsFirstMouse:))]
+        fn accepts_first_mouse(&self, _event: &NSEvent) -> bool {
+            true
+        }
+
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            let (x, y) = self.app_point(event);
+            if let Some(window) = self.window() {
+                window.makeKeyWindow();
+            }
+            let Some(region) = with_state_value(|state| region_at(&state.app, x, y)) else {
+                return;
+            };
+            match region {
+                Region::Caption => {
+                    // A native move loop handles the drag; report the result once
+                    // it returns.
+                    if let Some(window) = self.window() {
+                        window.performWindowDragWithEvent(event);
+                    }
+                    with_state(|state| move_or_resize_finished(&mut state.app));
+                }
+                Region::Edge(edge) => {
+                    let frame = self.window().map(|window| window.frame()).unwrap_or_default();
+                    RESIZE.with(|slot| {
+                        slot.set(Some(ResizeDrag {
+                            edge,
+                            start: NSEvent::mouseLocation(),
+                            frame,
+                        }))
+                    });
+                }
+                Region::Client => with_state(|state| {
+                    if event.clickCount() == 2 {
+                        pointer_double_clicked(&mut state.app, x, y);
+                    } else {
+                        pointer_pressed(&mut state.app, x, y);
+                    }
+                }),
+                Region::Transparent => {}
+            }
+        }
+
+        #[unsafe(method(mouseDragged:))]
+        fn mouse_dragged(&self, event: &NSEvent) {
+            if let Some(drag) = RESIZE.with(Cell::get) {
+                self.resize(drag);
+                return;
+            }
+            let (x, y) = self.app_point(event);
+            with_state(|state| pointer_moved(&mut state.app, x, y));
+        }
+
+        #[unsafe(method(mouseUp:))]
+        fn mouse_up(&self, _event: &NSEvent) {
+            if RESIZE.with(Cell::get).is_some() {
+                RESIZE.with(|slot| slot.set(None));
+                with_state(|state| move_or_resize_finished(&mut state.app));
+            } else {
+                with_state(|state| pointer_released(&mut state.app));
+            }
+        }
+
+        #[unsafe(method(mouseMoved:))]
+        fn mouse_moved(&self, event: &NSEvent) {
+            let (x, y) = self.app_point(event);
+            with_state(|state| pointer_moved(&mut state.app, x, y));
+        }
+
+        #[unsafe(method(scrollWheel:))]
+        fn scroll_wheel(&self, event: &NSEvent) {
+            let (x, y) = self.app_point(event);
+            let delta = if event.hasPreciseScrollingDeltas() {
+                (event.scrollingDeltaY() * 8.0).round() as i32
+            } else {
+                (event.scrollingDeltaY() * 120.0).round() as i32
+            };
+            if delta != 0 {
+                with_state(|state| wheel(&mut state.app, x, y, delta));
+            }
+        }
+
+        #[unsafe(method(keyDown:))]
+        fn key_down(&self, event: &NSEvent) {
+            let control = event
+                .modifierFlags()
+                .contains(NSEventModifierFlags::Control);
+            let Some(text) = event.characters() else {
+                return;
+            };
+            for character in text.to_string().chars() {
+                let key = match character {
+                    '\r' | '\u{3}' => Some(Key::Enter),
+                    '\u{1b}' => Some(Key::Escape),
+                    'a' | 'A' if control => Some(Key::SelectAll),
+                    _ => None,
+                };
+                if let Some(key) = key {
+                    with_state(|state| {
+                        key_pressed(&mut state.app, key);
+                    });
+                } else if !character.is_control() {
+                    with_state(|state| {
+                        text_typed(&mut state.app, character);
+                    });
+                }
+            }
+        }
+    }
+);
+
+impl OverlayView {
+    fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
+        let this = mtm.alloc::<Self>().set_ivars(());
+        unsafe { msg_send![super(this), initWithFrame: frame] }
+    }
+
+    /// Event location in the app's logical coordinates, matching the view and
+    /// hit regions (the same conversion the Wayland shell performs).
+    fn app_point(&self, event: &NSEvent) -> (f32, f32) {
+        let point = self.convertPoint_fromView(event.locationInWindow(), None);
+        let scale = self
+            .window()
+            .map(|window| window.backingScaleFactor())
+            .unwrap_or(1.) as f32;
+        let ui = with_state_value(|state| ui_scale(&state.app)).unwrap_or(scale);
+        (point.x as f32 * scale / ui, point.y as f32 * scale / ui)
+    }
+
+    fn resize(&self, drag: ResizeDrag) {
+        let Some(window) = self.window() else {
+            return;
+        };
+        let now = NSEvent::mouseLocation();
+        let (dx, dy) = (now.x - drag.start.x, now.y - drag.start.y);
+        let left = matches!(drag.edge, Edge::Left | Edge::TopLeft | Edge::BottomLeft);
+        let right = matches!(drag.edge, Edge::Right | Edge::TopRight | Edge::BottomRight);
+        let top = matches!(drag.edge, Edge::Top | Edge::TopLeft | Edge::TopRight);
+        let bottom = matches!(
+            drag.edge,
+            Edge::Bottom | Edge::BottomLeft | Edge::BottomRight
+        );
+        let mut frame = drag.frame;
+        if left {
+            frame.origin.x = drag.frame.origin.x + dx;
+            frame.size.width = drag.frame.size.width - dx;
+        }
+        if right {
+            frame.size.width = drag.frame.size.width + dx;
+        }
+        if top {
+            frame.size.height = drag.frame.size.height + dy;
+        }
+        if bottom {
+            frame.origin.y = drag.frame.origin.y + dy;
+            frame.size.height = drag.frame.size.height - dy;
+        }
+
+        let ((min_width, min_height), (max_width, max_height)) =
+            with_state_value(|state| size_limits(&state.app)).unwrap_or(((232, 160), (3200, 2400)));
+        let scale = window.backingScaleFactor();
+        let min_width = f64::from(min_width) / scale;
+        let min_height = f64::from(min_height) / scale;
+        let max_width = f64::from(max_width) / scale;
+        let max_height = f64::from(max_height) / scale;
+        let right_edge = drag.frame.origin.x + drag.frame.size.width;
+        let top_edge = drag.frame.origin.y + drag.frame.size.height;
+        if frame.size.width < min_width {
+            frame.size.width = min_width;
+            if left {
+                frame.origin.x = right_edge - min_width;
+            }
+        } else if frame.size.width > max_width {
+            frame.size.width = max_width;
+            if left {
+                frame.origin.x = right_edge - max_width;
+            }
+        }
+        if frame.size.height < min_height {
+            frame.size.height = min_height;
+            if bottom {
+                frame.origin.y = top_edge - min_height;
+            }
+        } else if frame.size.height > max_height {
+            frame.size.height = max_height;
+            if bottom {
+                frame.origin.y = top_edge - max_height;
+            }
+        }
+        window.setFrame_display(frame, true);
+    }
+}
+
+define_class!(
+    // SAFETY: NSWindow has no subclassing requirements that this type violates,
+    // and the window is only ever used on the main thread.
+    #[unsafe(super(NSWindow))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "AudezeOverlayWindow"]
+    struct OverlayWindow;
+
+    impl OverlayWindow {
+        #[unsafe(method(canBecomeKeyWindow))]
+        fn can_become_key(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method(canBecomeMainWindow))]
+        fn can_become_main(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method(resignKeyWindow))]
+        fn resign_key(&self) {
+            with_state(|state| focus_lost(&mut state.app));
+        }
+    }
+);
+
+impl OverlayWindow {
+    fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
+        let this = mtm.alloc::<Self>().set_ivars(());
+        unsafe {
+            msg_send![
+                super(this),
+                initWithContentRect: frame,
+                styleMask: NSWindowStyleMask::Borderless,
+                backing: NSBackingStoreType::Buffered,
+                defer: false
+            ]
+        }
+    }
+}
+
 struct Core {
-    window: objc2::rc::Retained<NSWindow>,
-    view: objc2::rc::Retained<NSView>,
-    layer: Option<objc2::rc::Retained<objc2_quartz_core::CALayer>>,
+    window: Retained<OverlayWindow>,
+    view: Retained<OverlayView>,
+    layer: Option<Retained<objc2_quartz_core::CALayer>>,
     visible: bool,
     interactive: bool,
     corners: i32,
@@ -169,15 +448,7 @@ struct Core {
 impl Core {
     fn new(mtm: MainThreadMarker) -> Result<Self> {
         let frame = NSRect::new(NSPoint::new(200., 200.), NSSize::new(440., 420.));
-        let window = unsafe {
-            NSWindow::initWithContentRect_styleMask_backing_defer(
-                mtm.alloc(),
-                frame,
-                NSWindowStyleMask::Borderless,
-                NSBackingStoreType::Buffered,
-                false,
-            )
-        };
+        let window = OverlayWindow::new(mtm, frame);
         window.setLevel(NSScreenSaverWindowLevel);
         window.setCollectionBehavior(
             NSWindowCollectionBehavior::CanJoinAllSpaces
@@ -189,8 +460,9 @@ impl Core {
         window.setBackgroundColor(Some(&NSColor::clearColor()));
         window.setHasShadow(false);
         window.setIgnoresMouseEvents(true);
+        window.setAcceptsMouseMovedEvents(true);
 
-        let view = NSView::new(mtm);
+        let view = OverlayView::new(mtm, frame);
         view.setWantsLayer(true);
         window.setContentView(Some(&view));
         let layer = view.layer();
@@ -394,11 +666,12 @@ impl Shell for MacShell {
             release: Some(release_timer_context),
             copyDescription: None,
         };
+        let interval = f64::from(ms.max(1)) / 1000.;
         let created = unsafe {
             CFRunLoopTimerCreate(
                 kCFAllocatorDefault,
-                CFAbsoluteTimeGetCurrent() + f64::from(ms) / 1000.,
-                0.,
+                CFAbsoluteTimeGetCurrent() + interval,
+                interval,
                 0,
                 0,
                 timer_fired_callback,
@@ -486,7 +759,15 @@ impl Shell for MacShell {
             None => monitor_by_index(0),
         }
     }
-    fn set_cursor(&mut self, _: Cursor) {}
+    fn set_cursor(&mut self, cursor: Cursor) {
+        let cursor = match cursor {
+            Cursor::Arrow => NSCursor::arrowCursor(),
+            Cursor::Hand => NSCursor::pointingHandCursor(),
+            Cursor::Move => NSCursor::closedHandCursor(),
+            Cursor::ResizeDiagonal => NSCursor::crosshairCursor(),
+        };
+        cursor.set();
+    }
     fn set_input_mode(&mut self, interactive: bool) {
         let mut core = self.core.borrow_mut();
         if core.interactive == interactive {
@@ -494,10 +775,18 @@ impl Shell for MacShell {
         }
         core.interactive = interactive;
         core.window.setIgnoresMouseEvents(!interactive);
+        if interactive {
+            core.window.makeFirstResponder(Some(&core.view));
+        } else {
+            core.window.makeFirstResponder(None);
+        }
     }
     fn show_window(&mut self, activate: bool) {
         let mut core = self.core.borrow_mut();
         core.visible = true;
+        if core.interactive {
+            core.window.makeFirstResponder(Some(&core.view));
+        }
         if activate {
             #[allow(deprecated)]
             NSApplication::sharedApplication(mtm()).activateIgnoringOtherApps(true);

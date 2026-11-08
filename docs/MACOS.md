@@ -57,14 +57,19 @@ or Linux behaviour changed.
 Done:
 
 - `src/ui/macos.rs`: accessory `NSApplication`, borderless non-activating window
-  above ordinary windows, layer/`CGImage` presentation, `CFRunLoop` timers, a
-  run-loop source for redraws and worker wakes, screens and backing scale,
-  `--demo` and live headset data.
+  above ordinary windows, layer/`CGImage` presentation, repeating `CFRunLoop`
+  timers, a run-loop source for redraws and worker wakes, screens and backing
+  scale, `--demo` and live headset data.
+- Pointer handling: flipped `NSView`, first-mouse acceptance, clicks, double
+  clicks, drags, wheel, edge resize, cursors and focus loss.
+- Verified with synthetic CoreGraphics input: gear opens Settings, back returns
+  to the dashboard, the Sidetone toggle changes state, and a click or drag on
+  the Game/Chat dial updates the mix.
 
 Remaining:
 
-- Pointer and keyboard events, caption drag and edge resize, pointer capture,
-  cursors, click-through toggling and focus loss.
+- Keyboard and text entry, edge resize and cursor changes are wired but not yet
+  exercised end to end.
 - Native menus, alerts and open/save panels.
 - Reuse the Unix-socket single-instance design and the coalescing signal helper.
 
