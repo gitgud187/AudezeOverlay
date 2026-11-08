@@ -12,7 +12,7 @@ use std::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Request {
+pub(in crate::ui) enum Request {
     /// Show the panel (what launching the application again does).
     Open,
     /// Show the panel if hidden, hide it if shown.
@@ -34,7 +34,7 @@ impl Request {
     }
 }
 
-pub(super) enum Role {
+pub(in crate::ui) enum Role {
     /// This process is the running instance and listens for requests.
     Primary(Instance),
     /// The request was delivered to the instance that is already running.
@@ -43,8 +43,8 @@ pub(super) enum Role {
 
 /// Keep the advisory lock for the listener's entire lifetime. The lock file is
 /// never unlinked: replacing its inode would let simultaneous owners through.
-pub(super) struct Instance {
-    pub listener: UnixListener,
+pub(in crate::ui) struct Instance {
+    pub(in crate::ui) listener: UnixListener,
     _lock: File,
     path: PathBuf,
 }
@@ -56,8 +56,10 @@ impl Drop for Instance {
 }
 
 /// Where the socket lives: inside the sandbox's own runtime directory in a
-/// Flatpak, else directly in the user's runtime directory.
-pub(super) fn socket_path() -> Option<PathBuf> {
+/// Flatpak, else directly in the user's runtime directory. macOS uses the
+/// per-user temporary directory.
+#[cfg(target_os = "linux")]
+pub(in crate::ui) fn socket_path() -> Option<PathBuf> {
     let runtime = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?);
     if !runtime.is_absolute() {
         return None;
@@ -68,8 +70,33 @@ pub(super) fn socket_path() -> Option<PathBuf> {
     })
 }
 
+#[cfg(target_os = "macos")]
+pub(in crate::ui) fn socket_path() -> Option<PathBuf> {
+    Some(std::env::temp_dir().join("audeze-overlay.sock"))
+}
+
+extern "C" {
+    fn flock(fd: std::os::fd::RawFd, operation: i32) -> i32;
+}
+const LOCK_EX: i32 = 2;
+const LOCK_NB: i32 = 4;
+
+fn try_lock(file: &File) -> std::io::Result<bool> {
+    use std::os::fd::AsRawFd;
+    let result = unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) };
+    if result == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        Ok(false)
+    } else {
+        Err(error)
+    }
+}
+
 /// Delivers `request` to a running instance, or becomes the running instance.
-pub(super) fn acquire(path: &Path, request: Request) -> std::io::Result<Role> {
+pub(in crate::ui) fn acquire(path: &Path, request: Request) -> std::io::Result<Role> {
     let lock = OpenOptions::new()
         .read(true)
         .write(true)
@@ -77,12 +104,7 @@ pub(super) fn acquire(path: &Path, request: Request) -> std::io::Result<Role> {
         .truncate(false)
         .mode(0o600)
         .open(path.with_extension("lock"))?;
-    let owns_lock =
-        match rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
-            Ok(()) => true,
-            Err(rustix::io::Errno::WOULDBLOCK) => false,
-            Err(error) => return Err(error.into()),
-        };
+    let owns_lock = try_lock(&lock)?;
     // The winner can hold the lock briefly before binding its socket. A bounded
     // retry forwards to it instead of removing a live socket or starting USB twice.
     for attempt in 0..20 {
@@ -117,14 +139,24 @@ pub(super) fn acquire(path: &Path, request: Request) -> std::io::Result<Role> {
 
 /// Reads the request a client sent, if it is a known one. Reads at most a few
 /// bytes and never waits long, so a stalled client cannot hold up the window.
-pub(super) fn read_request(mut stream: UnixStream) -> Option<Request> {
-    stream.set_nonblocking(false).ok()?;
-    stream
-        .set_read_timeout(Some(Duration::from_millis(100)))
-        .ok()?;
+pub(in crate::ui) fn read_request(mut stream: UnixStream) -> Option<Request> {
+    stream.set_nonblocking(true).ok()?;
     let mut buffer = [0u8; 16];
-    let count = stream.read(&mut buffer).ok()?;
-    Request::parse(std::str::from_utf8(&buffer[..count]).ok()?)
+    let mut waited = 0;
+    loop {
+        match stream.read(&mut buffer) {
+            Ok(0) => return None,
+            Ok(count) => return Request::parse(std::str::from_utf8(&buffer[..count]).ok()?),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if waited >= 100 {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+                waited += 5;
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 #[cfg(test)]

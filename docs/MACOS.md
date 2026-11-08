@@ -61,30 +61,45 @@ Done:
   timers, a run-loop source for redraws and worker wakes, screens and backing
   scale, `--demo` and live headset data.
 - Pointer handling: flipped `NSView`, first-mouse acceptance, clicks, double
-  clicks, drags, wheel, edge resize, cursors and focus loss.
+  clicks, drags, wheel, edge resize and cursors.
+- One running instance: a second launch forwards `open`/`toggle` over the shared
+  Unix socket; verified that `--toggle` hides and then restores the panel.
 - Verified with synthetic CoreGraphics input: gear opens Settings, back returns
   to the dashboard, the Sidetone toggle changes state, and a click or drag on
   the Game/Chat dial updates the mix.
 
 Remaining:
 
-- Keyboard and text entry, edge resize and cursor changes are wired but not yet
-  exercised end to end.
+- Keyboard and text entry, focus-loss handling, edge resize and cursor changes
+  are wired but not yet exercised end to end.
 - Native menus, alerts and open/save panels.
-- Reuse the Unix-socket single-instance design and the coalescing signal helper.
 
 **Exit:** `--demo` shows and hides a correct overlay on a Retina display and on a
 second display, including window movement across screens.
 
 ### 4. Desktop integration
 
-- Native menus, alerts and open/save panels; status item with a template image;
-  global shortcut via Carbon `RegisterEventHotKey`; launch at login via
-  `SMAppService`; autostart error text for unbundled development runs.
-- Map the preference format's Windows virtual-key codes to macOS key codes.
+Done:
 
-**Exit:** parity with the Linux desktop-integration list in [LINUX.md](LINUX.md):
-tray, shortcut, autostart, profile import/export and one running instance.
+- Status item with the template logo and a menu for Open, Settings, Reset
+  position, Hide and Quit; menu actions were verified by keyboard selection.
+- Launch at login through `SMAppService` (macOS 13+); success still needs an
+  app bundle, so only the code path is in place.
+- One running instance and `--toggle`, shared with the Wayland shell.
+
+Skipped:
+
+- Global shortcut. Carbon registration succeeded, but its callback ran while
+  the UI state was borrowed and aborted the process. The shortcut is disabled on
+  macOS rather than shipped half-working; revisit with a deferred event.
+
+Remaining:
+
+- Native menus, alerts and open/save panels.
+- Profile import/export through a native open/save panel.
+
+**Exit:** tray, autostart, profile import/export and one running instance. A
+global shortcut is explicitly out of scope for the first macOS release.
 
 ### 5. Fullscreen, Spaces and blur
 

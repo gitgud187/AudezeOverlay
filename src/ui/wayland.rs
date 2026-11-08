@@ -5,7 +5,6 @@
 //! same input functions the Windows shell uses.
 mod autostart;
 mod blur;
-mod instance;
 mod modal;
 mod portal;
 mod scaling;
@@ -13,7 +12,7 @@ mod shell;
 mod shortcut;
 mod signals;
 mod tray;
-use super::{app::*, draw::Painter, shell::*};
+use super::{app::*, draw::Painter, instance, shell::*};
 use audeze_overlay::{config::Config, device, model::SoundState};
 use shell::{Core, Output, WlShell};
 use smithay_client_toolkit::{

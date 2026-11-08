@@ -1,6 +1,8 @@
 //! Native overlay presentation and event handling.
 mod app;
 mod draw;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod instance;
 #[cfg(target_os = "macos")]
 mod macos;
 mod number_roll;

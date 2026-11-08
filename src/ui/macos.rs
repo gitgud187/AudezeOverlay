@@ -4,7 +4,7 @@
 //! windows, backed by a layer whose contents are the CPU-rasterized frame. The
 //! portable `App` decides what to draw; this shell translates its requests into
 //! AppKit calls and translates timer and worker events back into app input.
-use super::{app::*, draw::Painter, shell::*};
+use super::{app::*, draw::Painter, instance, shell::*};
 use audeze_overlay::{
     config::Config,
     device::{self, command::Signal},
@@ -21,18 +21,23 @@ use core_foundation_sys::{
     },
 };
 use objc2::{
-    define_class, msg_send, rc::Retained, runtime::AnyObject, MainThreadMarker, MainThreadOnly,
+    define_class, msg_send, rc::Retained, runtime::AnyObject, runtime::Sel, sel, MainThreadMarker,
+    MainThreadOnly,
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSCursor, NSEvent,
-    NSEventModifierFlags, NSScreen, NSScreenSaverWindowLevel, NSView, NSWindow,
+    NSEventModifierFlags, NSImage, NSMenu, NSMenuItem, NSScreen, NSScreenSaverWindowLevel,
+    NSStatusBar, NSStatusItem, NSVariableStatusItemLength, NSView, NSWindow,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CFData, CFRetained};
 use objc2_core_graphics::{
     CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage, CGImageAlphaInfo,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize};
+use objc2_foundation::{
+    NSObject, NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect, NSSize, NSString,
+};
+use objc2_service_management::SMAppService;
 use std::{
     cell::{Cell, RefCell},
     ffi::c_void,
@@ -42,6 +47,7 @@ use std::{
         atomic::{AtomicU8, Ordering},
         Arc, Mutex,
     },
+    thread,
 };
 use tiny_skia::Pixmap;
 
@@ -83,6 +89,7 @@ impl Pending {
 struct State {
     app: App,
     pending: Arc<Pending>,
+    requests: Arc<Mutex<Vec<instance::Request>>>,
 }
 
 pub fn main() {
@@ -104,19 +111,35 @@ fn run() -> Result<()> {
         ));
     }
     let demo = args.iter().any(|a| a == "--demo");
+    let request = if args.iter().any(|a| a == "--toggle") {
+        instance::Request::Toggle
+    } else {
+        instance::Request::Open
+    };
+    let socket = instance::socket_path().filter(|_| !demo);
+    let instance = match &socket {
+        Some(path) => match instance::acquire(path, request)
+            .map_err(|error| format!("single-instance startup failed: {error}"))?
+        {
+            instance::Role::Forwarded => return Ok(()),
+            instance::Role::Primary(instance) => Some(instance),
+        },
+        None => None,
+    };
     let mtm = MainThreadMarker::new()
         .ok_or("The overlay must start on the macOS main thread.".to_string())?;
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
-    let core = Rc::new(RefCell::new(Core::new(mtm)?));
+    let painter = Painter::try_new()?;
+    let tray_icon = tray_icon_pixmap(&painter, 32);
+    let core = Rc::new(RefCell::new(Core::new(mtm, tray_icon)?));
     let shell = MacShell { core: core.clone() };
     let config = if demo {
         Config::default()
     } else {
         Config::load()
     };
-    let painter = Painter::try_new()?;
     let latest = Arc::new(Mutex::new(SoundState::default()));
     let launch = Launch {
         demo,
@@ -128,6 +151,7 @@ fn run() -> Result<()> {
     let mut state = Box::new(State {
         app: App::new(Box::new(shell), config, launch, latest.clone(), painter),
         pending: Arc::new(Pending::default()),
+        requests: Arc::new(Mutex::new(Vec::new())),
     });
     STATE.with(|cell| cell.set(&mut *state as *mut State));
 
@@ -150,7 +174,35 @@ fn run() -> Result<()> {
         ));
     }
 
+    if let Some(instance) = instance {
+        instance
+            .listener
+            .set_nonblocking(false)
+            .map_err(|e| e.to_string())?;
+        let requests = state.requests.clone();
+        let wake = core.borrow().redraw as usize;
+        thread::Builder::new()
+            .name("instance-listener".into())
+            .spawn(move || {
+                for stream in instance.listener.incoming() {
+                    let Ok(stream) = stream else {
+                        continue;
+                    };
+                    let Some(request) = instance::read_request(stream) else {
+                        continue;
+                    };
+                    requests.lock().unwrap().push(request);
+                    unsafe {
+                        CFRunLoopSourceSignal(wake as CFRunLoopSourceRef);
+                        CFRunLoopWakeUp(CFRunLoopGetMain());
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
+    }
+
     app.finishLaunching();
+    ensure_tray(&mut state.app);
     show(&mut state.app, true);
     app.run();
     STATE.with(|cell| cell.set(ptr::null_mut()));
@@ -410,11 +462,6 @@ define_class!(
         fn can_become_main(&self) -> bool {
             true
         }
-
-        #[unsafe(method(resignKeyWindow))]
-        fn resign_key(&self) {
-            with_state(|state| focus_lost(&mut state.app));
-        }
     }
 );
 
@@ -433,6 +480,49 @@ impl OverlayWindow {
     }
 }
 
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements and the target is only
+    // used from AppKit's main thread.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "AudezeOverlayTrayTarget"]
+    struct TrayTarget;
+
+    impl TrayTarget {
+        #[unsafe(method(open:))]
+        fn open(&self, _: &AnyObject) {
+            with_state(|state| tray_command(&mut state.app, TrayCommand::Open));
+        }
+
+        #[unsafe(method(settings:))]
+        fn settings(&self, _: &AnyObject) {
+            with_state(|state| tray_command(&mut state.app, TrayCommand::Settings));
+        }
+
+        #[unsafe(method(resetPosition:))]
+        fn reset_position(&self, _: &AnyObject) {
+            with_state(|state| tray_command(&mut state.app, TrayCommand::ResetPosition));
+        }
+
+        #[unsafe(method(hidePanel:))]
+        fn hide_panel(&self, _: &AnyObject) {
+            with_state(|state| tray_command(&mut state.app, TrayCommand::Hide));
+        }
+
+        #[unsafe(method(quitApp:))]
+        fn quit_app(&self, _: &AnyObject) {
+            with_state(|state| tray_command(&mut state.app, TrayCommand::Quit));
+        }
+    }
+);
+
+impl TrayTarget {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = mtm.alloc::<Self>().set_ivars(());
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
 struct Core {
     window: Retained<OverlayWindow>,
     view: Retained<OverlayView>,
@@ -444,9 +534,12 @@ struct Core {
     frame: Option<CFRetained<CGImage>>,
     timers: [Option<CFRunLoopTimerRef>; TIMER_COUNT],
     redraw: CFRunLoopSourceRef,
+    tray_icon: Option<Pixmap>,
+    status_item: Option<Retained<NSStatusItem>>,
+    tray_target: Option<Retained<TrayTarget>>,
 }
 impl Core {
-    fn new(mtm: MainThreadMarker) -> Result<Self> {
+    fn new(mtm: MainThreadMarker, tray_icon: Option<Pixmap>) -> Result<Self> {
         let frame = NSRect::new(NSPoint::new(200., 200.), NSSize::new(440., 420.));
         let window = OverlayWindow::new(mtm, frame);
         window.setLevel(NSScreenSaverWindowLevel);
@@ -496,6 +589,9 @@ impl Core {
             frame: None,
             timers: [None; TIMER_COUNT],
             redraw,
+            tray_icon,
+            status_item: None,
+            tray_target: None,
         })
     }
     fn present(&mut self) {
@@ -545,6 +641,16 @@ impl MacShell {
 
 extern "C" fn redraw_performed(_: *const c_void) {
     with_state(|state| {
+        let requests = {
+            let mut queue = state.requests.lock().unwrap();
+            std::mem::take(&mut *queue)
+        };
+        for request in requests {
+            match request {
+                instance::Request::Open => open_requested(&mut state.app),
+                instance::Request::Toggle => toggle(&mut state.app),
+            }
+        }
         let (status, control) = state.pending.take();
         if status {
             status_changed(&mut state.app);
@@ -654,6 +760,10 @@ fn image_from(pixels: &Pixmap) -> Result<CFRetained<CGImage>> {
 // ---- Shell.
 
 impl Shell for MacShell {
+    #[cfg(test)]
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
     fn start_timer(&mut self, timer: Timer, ms: u32) -> bool {
         let index = timer_index(timer);
         let mut core = self.core.borrow_mut();
@@ -730,27 +840,37 @@ impl Shell for MacShell {
         }
     }
     fn place(&mut self, target: Rect) {
-        let core = self.core.borrow();
-        let scale = window_scale(&core.window);
-        let left = f64::from(target.left) / scale;
-        let top = f64::from(target.top) / scale;
-        let width = f64::from(target.width()) / scale;
-        let height = f64::from(target.height()) / scale;
-        let frame = NSRect::new(
-            NSPoint::new(left, primary_height() - top - height),
-            NSSize::new(width, height),
-        );
-        core.window.setFrame_display(frame, false);
+        let (window, frame) = {
+            let core = self.core.borrow();
+            let scale = window_scale(&core.window);
+            let left = f64::from(target.left) / scale;
+            let top = f64::from(target.top) / scale;
+            let width = f64::from(target.width()) / scale;
+            let height = f64::from(target.height()) / scale;
+            (
+                core.window.clone(),
+                NSRect::new(
+                    NSPoint::new(left, primary_height() - top - height),
+                    NSSize::new(width, height),
+                ),
+            )
+        };
+        window.setFrame_display(frame, false);
     }
     fn move_to(&mut self, x: i32, y: i32) {
-        let core = self.core.borrow();
-        let scale = window_scale(&core.window);
-        let frame = core.window.frame();
-        let origin = NSPoint::new(
-            f64::from(x) / scale,
-            primary_height() - f64::from(y) / scale - frame.size.height,
-        );
-        core.window.setFrameOrigin(origin);
+        let (window, origin) = {
+            let core = self.core.borrow();
+            let scale = window_scale(&core.window);
+            let frame = core.window.frame();
+            (
+                core.window.clone(),
+                NSPoint::new(
+                    f64::from(x) / scale,
+                    primary_height() - f64::from(y) / scale - frame.size.height,
+                ),
+            )
+        };
+        window.setFrameOrigin(origin);
     }
     fn window_work_area(&self) -> Rect {
         let core = self.core.borrow();
@@ -769,41 +889,51 @@ impl Shell for MacShell {
         cursor.set();
     }
     fn set_input_mode(&mut self, interactive: bool) {
-        let mut core = self.core.borrow_mut();
-        if core.interactive == interactive {
-            return;
-        }
-        core.interactive = interactive;
-        core.window.setIgnoresMouseEvents(!interactive);
+        let (window, view) = {
+            let mut core = self.core.borrow_mut();
+            if core.interactive == interactive {
+                return;
+            }
+            core.interactive = interactive;
+            (core.window.clone(), core.view.clone())
+        };
+        window.setIgnoresMouseEvents(!interactive);
         if interactive {
-            core.window.makeFirstResponder(Some(&core.view));
+            window.makeFirstResponder(Some(&view));
         } else {
-            core.window.makeFirstResponder(None);
+            window.makeFirstResponder(None);
         }
     }
     fn show_window(&mut self, activate: bool) {
-        let mut core = self.core.borrow_mut();
-        core.visible = true;
-        if core.interactive {
-            core.window.makeFirstResponder(Some(&core.view));
+        let (window, view, interactive) = {
+            let mut core = self.core.borrow_mut();
+            core.visible = true;
+            (core.window.clone(), core.view.clone(), core.interactive)
+        };
+        if interactive {
+            window.makeFirstResponder(Some(&view));
         }
         if activate {
             #[allow(deprecated)]
             NSApplication::sharedApplication(mtm()).activateIgnoringOtherApps(true);
-            core.window.makeKeyAndOrderFront(None);
+            window.makeKeyAndOrderFront(None);
         } else {
-            core.window.orderFrontRegardless();
+            window.orderFrontRegardless();
         }
     }
     fn hide_window(&mut self) {
-        let mut core = self.core.borrow_mut();
-        core.visible = false;
-        core.window.orderOut(None);
+        let window = {
+            let mut core = self.core.borrow_mut();
+            core.visible = false;
+            core.window.clone()
+        };
+        window.orderOut(None);
     }
     fn focus(&mut self) {
         #[allow(deprecated)]
         NSApplication::sharedApplication(mtm()).activateIgnoringOtherApps(true);
-        self.core.borrow().window.makeKeyAndOrderFront(None);
+        let window = self.core.borrow().window.clone();
+        window.makeKeyAndOrderFront(None);
     }
     fn set_blur(&mut self, _: u8) {}
     fn clip_rounded(&mut self, diameter: i32) {
@@ -881,13 +1011,83 @@ impl Shell for MacShell {
         false
     }
     fn tray_add(&mut self) -> bool {
-        false
+        let mut core = self.core.borrow_mut();
+        if core.status_item.is_some() {
+            return true;
+        }
+        let mtm = mtm();
+        let Some(icon_image) = core
+            .tray_icon
+            .as_ref()
+            .and_then(|pixmap| image_from(pixmap).ok())
+        else {
+            return false;
+        };
+        let icon = NSImage::initWithCGImage_size(mtm.alloc(), &icon_image, NSSize::new(18., 18.));
+        icon.setTemplate(true);
+
+        let target = TrayTarget::new(mtm);
+        let menu = NSMenu::new(mtm);
+        {
+            let add = |title: &str, action: Sel| {
+                let item = unsafe {
+                    NSMenuItem::initWithTitle_action_keyEquivalent(
+                        mtm.alloc(),
+                        &NSString::from_str(title),
+                        Some(action),
+                        &NSString::from_str(""),
+                    )
+                };
+                unsafe { item.setTarget(Some(&*target as &AnyObject)) };
+                menu.addItem(&item);
+            };
+            add("Open", sel!(open:));
+            add("Settings", sel!(settings:));
+            add("Reset position", sel!(resetPosition:));
+            add("Hide", sel!(hidePanel:));
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+            add("Quit", sel!(quitApp:));
+        }
+
+        let status =
+            NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
+        #[allow(deprecated)]
+        status.setImage(Some(&icon));
+        status.setMenu(Some(&menu));
+        core.status_item = Some(status);
+        core.tray_target = Some(target);
+        true
     }
-    fn tray_remove(&mut self) {}
-    fn set_autostart(&mut self, _: bool) -> std::result::Result<(), String> {
-        Err("Launch at login is not implemented on macOS yet.".into())
+    fn tray_remove(&mut self) {
+        let status = {
+            let mut core = self.core.borrow_mut();
+            core.tray_target = None;
+            core.status_item.take()
+        };
+        if let Some(status) = status {
+            NSStatusBar::systemStatusBar().removeStatusItem(&status);
+        }
     }
-    fn shutdown(&mut self) {}
+    fn set_autostart(&mut self, enabled: bool) -> std::result::Result<(), String> {
+        let info = NSProcessInfo::processInfo();
+        if !info.isOperatingSystemAtLeastVersion(NSOperatingSystemVersion {
+            majorVersion: 13,
+            minorVersion: 0,
+            patchVersion: 0,
+        }) {
+            return Err("Launch at login requires macOS 13 or newer.".into());
+        }
+        let service = unsafe { SMAppService::mainAppService() };
+        let result = if enabled {
+            unsafe { service.registerAndReturnError() }
+        } else {
+            unsafe { service.unregisterAndReturnError() }
+        };
+        result.map_err(|error| error.localizedDescription().to_string())
+    }
+    fn shutdown(&mut self) {
+        self.tray_remove();
+    }
 }
 
 fn monitor_key(screen: &NSScreen, index: usize) -> String {
