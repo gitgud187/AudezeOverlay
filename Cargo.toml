@@ -57,6 +57,34 @@ smithay-client-toolkit = "0.21"
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSApplication",
+    "NSColor",
+    "NSGraphics",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSScreen",
+    "NSView",
+    "NSWindow",
+    "objc2-core-foundation",
+    "objc2-quartz-core",
+] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["CFData"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = [
+    "CGColorSpace",
+    "CGDataProvider",
+    "CGImage",
+    "objc2",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "NSEnumerator",
+    "NSGeometry",
+] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
+    "CALayer",
+    "objc2-core-foundation",
+] }
 
 [build-dependencies]
 embed-resource = "3.0.11"

@@ -1,6 +1,8 @@
 //! Native overlay presentation and event handling.
 mod app;
 mod draw;
+#[cfg(target_os = "macos")]
+mod macos;
 mod number_roll;
 mod presentation;
 mod shell;
@@ -9,6 +11,8 @@ mod view;
 mod wayland;
 #[cfg(windows)]
 mod win32;
+#[cfg(target_os = "macos")]
+pub use macos::main as run;
 #[cfg(target_os = "linux")]
 pub use wayland::main as run;
 #[cfg(windows)]

@@ -2,10 +2,10 @@
 
 [Back to documentation](README.md)
 
-> **Status: in progress.** The macOS HID transport is implemented and verified on
-> one headset. The window shell, desktop integration and packaging are still to
-> do. The Linux port is the reference for scope and validation; see
-> [Linux](LINUX.md).
+> **Status: in progress.** The HID transport and the first AppKit window shell
+> are implemented; the overlay shows live headset data on a Retina display.
+> Pointer/keyboard interaction, desktop integration and packaging remain. The
+> Linux port is the reference for scope and validation; see [Linux](LINUX.md).
 
 ## Goal
 
@@ -40,26 +40,33 @@ read back, restored, and matched the original state; and repeated unplug/replug
 cycles woke the worker and re-enumerated the dongle. This is one device and one
 firmware, not a broader compatibility claim.
 
-### 2. Core wiring
+### 2. Core wiring — done
 
-- Add `target_os = "macos"` arms in `src/main.rs`, `src/ui/mod.rs`,
-  `src/device/hid.rs` and `FileSelection`.
-- Preferences move to `~/Library/Application Support/AudezeOverlay`.
-- Add a macOS font lookup (no fontconfig on stock macOS; avoid `.ttc` and verify
-  whether fontdue reads the SF variable font) and a bundle-aware `asset()` path.
-- Add the macOS dependencies to `Cargo.toml`.
+- Added `target_os = "macos"` arms in `src/main.rs`, `src/ui/mod.rs`,
+  `src/device/hid.rs`, `FileSelection` and `Cargo.toml`.
+- Preferences moved to `~/Library/Application Support/AudezeOverlay`.
+- Added a macOS font lookup (no fontconfig on stock macOS; a variable SF file
+  falls through to Arial or Verdana) and the macOS dependencies.
+- The bundle-aware `asset()` path moves with the `.app` packaging step.
 
-**Exit:** `cargo fmt`, `clippy`, `test` and `preview-layouts` pass on a clean
-Mac, with no Windows or Linux behaviour changed.
+**Exit:** `cargo test` and `preview-layouts` pass on a clean Mac, with no Windows
+or Linux behaviour changed.
 
-### 3. Minimal shell
+### 3. Minimal shell — in progress
 
-- New `src/ui/macos/`: accessory `NSApplication`, borderless non-activating
-  window above normal windows, layer/`CGImage` presentation, `CFRunLoop` timers,
-  worker wake on the main thread, screens and backing scale, pointer/keyboard
-  events, caption drag and edge resize, show/hide/quit.
-- Reuse the Unix-socket single-instance design and the coalescing signal helper
-  from the Wayland shell.
+Done:
+
+- `src/ui/macos.rs`: accessory `NSApplication`, borderless non-activating window
+  above ordinary windows, layer/`CGImage` presentation, `CFRunLoop` timers, a
+  run-loop source for redraws and worker wakes, screens and backing scale,
+  `--demo` and live headset data.
+
+Remaining:
+
+- Pointer and keyboard events, caption drag and edge resize, pointer capture,
+  cursors, click-through toggling and focus loss.
+- Native menus, alerts and open/save panels.
+- Reuse the Unix-socket single-instance design and the coalescing signal helper.
 
 **Exit:** `--demo` shows and hides a correct overlay on a Retina display and on a
 second display, including window movement across screens.
