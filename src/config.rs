@@ -196,15 +196,24 @@ impl Config {
     pub fn fit_layout(&mut self) {
         self.resize_canvas(self.width, self.height);
     }
-    /// Where preferences live: the user's local application data on Windows, the
-    /// XDG config directory elsewhere.
+    /// Where preferences live: the user's local application data on Windows,
+    /// Application Support on macOS, and the XDG config directory elsewhere.
     pub fn path() -> PathBuf {
         #[cfg(windows)]
         let (base, app) = (
             std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
             "AudezeOverlay",
         );
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        let (base, app) = (
+            std::env::var_os("HOME").map(|home| {
+                PathBuf::from(home)
+                    .join("Library")
+                    .join("Application Support")
+            }),
+            "AudezeOverlay",
+        );
+        #[cfg(not(any(windows, target_os = "macos")))]
         let (base, app) = (
             std::env::var_os("XDG_CONFIG_HOME")
                 .map(PathBuf::from)
@@ -494,5 +503,16 @@ mod tests {
         assert!(!valid_hotkey(3, 0x24));
         assert!(!valid_hotkey(0, 0x12));
         assert!(!valid_hotkey(0, 0x7b));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn preferences_live_in_application_support() {
+        assert!(Config::path().ends_with(
+            PathBuf::from("Library")
+                .join("Application Support")
+                .join("AudezeOverlay")
+                .join("settings.json")
+        ));
     }
 }

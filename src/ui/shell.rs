@@ -8,11 +8,11 @@
 //! Menus and confirmations are modal. File selection can finish immediately or
 //! deliver a later result on the UI loop, keeping portal waits off that loop.
 use std::any::Any;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 use std::path::PathBuf;
 
 pub enum FileSelection {
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "macos", test))]
     Ready(Option<PathBuf>),
     #[cfg(any(target_os = "linux", test))]
     Pending,
