@@ -2,9 +2,10 @@
 
 [Back to documentation](README.md)
 
-> **Status: planned.** This is the working plan for a native macOS build. Nothing
-> here is implemented yet. The Linux port is the reference for scope and
-> validation; see [Linux](LINUX.md).
+> **Status: in progress.** The macOS HID transport is implemented and verified on
+> one headset. The window shell, desktop integration and packaging are still to
+> do. The Linux port is the reference for scope and validation; see
+> [Linux](LINUX.md).
 
 ## Goal
 
@@ -19,19 +20,25 @@ The port is additive: one `Shell` implementation, one HID transport, small
 
 ## Order of work
 
-### 1. Device transport first
+### 1. Device transport first — done
 
-- Add `src/device/hid/mac.rs` using `IOHIDManager`/`IOHIDDevice`; match the
-  vendor control collection (`0xff13`/`1`, vendor `0x3329`).
-- Implement `get_input_report`/`write_report`, endpoint identity and hot-plug
+- Added `src/device/hid/mac.rs` using `IOHIDManager`/`IOHIDDevice`; macOS
+  publishes the interface's report descriptor, so the vendor control collection
+  (`0xff13`/`1`) is found with the shared descriptor reader.
+- Implemented `get_input_report`/`write_report`, endpoint identity and hot-plug
   callbacks with the same debounce as hidraw.
-- Reuse `control_report_sizes_plausible` and the report-size properties instead
-  of porting the descriptor parser.
-- Validate with `verify-direct` on a real Maxwell: read-only snapshot, then
+- Validated with `verify-direct` on a real Maxwell: read-only snapshot, then
   `--controls-and-restore` with the headset present, then unplug/replug.
 
 **Exit:** the shared worker controls a headset on macOS. This de-risks the only
 part that cannot be validated without hardware.
+
+Hardware evidence: an Audeze Maxwell Xbox dongle (`3329:4b18`) returned a live
+snapshot (battery, mix, sidetone, EQ index); the polling worker completed in
+about 1.3 s; mix, noise filter, sidetone on/off and sidetone level each changed,
+read back, restored, and matched the original state; and repeated unplug/replug
+cycles woke the worker and re-enumerated the dongle. This is one device and one
+firmware, not a broader compatibility claim.
 
 ### 2. Core wiring
 
