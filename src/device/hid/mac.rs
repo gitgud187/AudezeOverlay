@@ -51,9 +51,32 @@ const VENDOR_ID: i32 = 0x3329;
 const HOTPLUG_SETTLE_MS: u64 = 300;
 
 const IO_RETURN_SUCCESS: i32 = 0;
-const IO_RETURN_EXCLUSIVE_ACCESS: i32 = 0xE000_02C5u32 as i32;
+const IO_RETURN_TIMEOUT: i32 = 0xE000_02D6u32 as i32;
+const IO_RETURN_NOT_READY: i32 = 0xE000_02D8u32 as i32;
 const IO_RETURN_NOT_OPEN: i32 = 0xE000_02CDu32 as i32;
 const IO_RETURN_NOT_PERMITTED: i32 = 0xE000_02E2u32 as i32;
+const IO_RETURN_EXCLUSIVE_ACCESS: i32 = 0xE000_02C5u32 as i32;
+const IO_RETURN_NOT_RESPONDING: i32 = 0xE000_02EDu32 as i32;
+const IO_RETURN_DEVICE_ERROR: i32 = 0xE000_02E9u32 as i32;
+const IO_RETURN_ABORTED: i32 = 0xE000_02EBu32 as i32;
+
+/// The endpoint is gone or mid-teardown. macOS reports several codes while a
+/// dongle is being unplugged; all mean the worker should reconnect.
+fn disconnected(result: IOReturn) -> bool {
+    matches!(
+        result,
+        IO_RETURN_TIMEOUT
+            | IO_RETURN_NOT_READY
+            | IO_RETURN_NOT_OPEN
+            | IO_RETURN_NOT_RESPONDING
+            | IO_RETURN_DEVICE_ERROR
+            | IO_RETURN_ABORTED
+    )
+}
+
+fn denied(result: IOReturn) -> bool {
+    matches!(result, IO_RETURN_NOT_PERMITTED | IO_RETURN_EXCLUSIVE_ACCESS)
+}
 
 /// Shown when a recognized interface exists but cannot be opened.
 const PERMISSION_HELP: &str = "The headset's HID interface could not be opened. \
@@ -186,7 +209,10 @@ impl Hid for Node {
         };
         match result {
             IO_RETURN_SUCCESS => Ok(()),
-            IO_RETURN_NOT_OPEN => Err("USB connection lost. Reconnecting…".into()),
+            _ if disconnected(result) => Err("USB connection lost. Reconnecting…".into()),
+            _ if denied(result) => {
+                Err("Permission denied writing to the headset's HID interface.".into())
+            }
             _ => Err(format!("USB sound command failed ({result:#x}).")),
         }
     }
@@ -203,8 +229,8 @@ impl Hid for Node {
         };
         match result {
             IO_RETURN_SUCCESS => Ok(()),
-            IO_RETURN_NOT_OPEN => Err("USB connection lost. Reconnecting…".into()),
-            IO_RETURN_NOT_PERMITTED | IO_RETURN_EXCLUSIVE_ACCESS => {
+            _ if disconnected(result) => Err("USB connection lost. Reconnecting…".into()),
+            _ if denied(result) => {
                 Err("Permission denied reading the headset's HID reports.".into())
             }
             _ => Err(format!("USB read failed ({result:#x}).")),
