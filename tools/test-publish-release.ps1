@@ -107,7 +107,7 @@ function gh {
             Assert-That $release.draft 'Published assets must never be overwritten'
             if ($global:AudezeReleaseTeststate.failUpload) { $global:LASTEXITCODE = 1; return }
             $uploads = @($a[3..($a.IndexOf('--repo') - 1)])
-            Assert-That ($uploads.Count -eq 5) 'Unexpected uploaded file count'
+            Assert-That ($uploads.Count -eq 6) 'Unexpected uploaded file count'
             $release.assets = @($uploads | ForEach-Object { @{ name = [IO.Path]::GetFileName($_); size = 7 } })
             if ($global:AudezeReleaseTeststate.supersedeAfterUpload) { $global:AudezeReleaseTeststate.head = $global:AudezeReleaseTestbase }
         }
@@ -116,7 +116,7 @@ function gh {
             if ('--title' -in $a) { $release.name = $a[$a.IndexOf('--title') + 1] }
             if ('--notes-file' -in $a) { $release.body = Get-Content -Raw -LiteralPath $a[$a.IndexOf('--notes-file') + 1] }
             if ('--draft=false' -in $a) {
-                Assert-That ($release.assets.Count -eq 5) 'Published before downloads were uploaded'
+                Assert-That ($release.assets.Count -eq 6) 'Published before downloads were uploaded'
                 $release.draft = $false
                 $release.published_at = '2026-02-01T00:00:00Z'
                 $release.prerelease = '--prerelease=true' -in $a
