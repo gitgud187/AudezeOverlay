@@ -275,16 +275,23 @@ keyboard focus and a running window server.
   second `--toggle` exits 0 while the first instance stays alive.
 - CI must pass the Windows, Linux, Flatpak and macOS jobs.
 
-Local result: formatting, clippy and all tests pass. The packaged
-`Audeze-Overlay-macOS-arm64.dmg` verifies its SHA-256, mounts, contains the
-`Applications` symlink, and its app passes strict signature verification. The
-bundled app created the expected socket and forwarded `--toggle` with exit 0.
-The display was locked, so this pass did not repeat the visual overlay check;
-the earlier rendering evidence and the unchanged presentation path still apply.
+Local result: formatting and clippy pass. All **82** lib tests and **42** binary
+tests pass, including the new HID removal/framing tests and the key-translation
+tests. The packaged `Audeze-Overlay-macOS-arm64.dmg` verifies its SHA-256,
+mounts, contains the `Applications` symlink, and its app passes strict signature
+verification. The bundled app created the expected socket and forwarded
+`--toggle` with exit 0.
 
-CI result: run `42573811921` passed the Windows build, Linux check, Flatpak and
-macOS check jobs, including the new tests and DMG packaging/upload. The release
-job skipped as expected on a branch.
+Runtime limits: the display was locked, so the blur corner mask and the
+modal/focus deferral were verified by construction and tests, not by a new
+visual or modal interaction. Normal-quit socket unlinking uses the existing
+`Instance` drop path (covered by the instance tests) but was not exercised
+through the UI; the process was stopped externally after the smoke test.
+
+CI result: run `42708533527` passed the Windows build, Linux check, Flatpak and
+macOS check jobs, including the new HID and key tests and DMG
+packaging/upload. The first macOS attempt was cancelled before a runner was
+assigned; the rerun passed. The release job skipped as expected on a branch.
 
 ## Open items
 

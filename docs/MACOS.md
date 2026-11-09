@@ -158,7 +158,7 @@ Done:
 - Verified locally: the bundle launches with no Dock icon, renders, and forwards
   `--toggle` to the running instance.
 - The macOS job runs in the same workflow as Windows, Linux and Flatpak; CI run
-  `42573811921` passed all four jobs with the DMG packaging and upload.
+  `42708533527` passed all four jobs with the DMG packaging and upload.
 - The CI artifact is the same disk image whose checksum and signature are
   verified during packaging.
 
