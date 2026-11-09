@@ -57,6 +57,26 @@ type Result<T, E = String> = std::result::Result<T, E>;
 
 const TIMER_COUNT: usize = 4;
 
+#[derive(Debug, PartialEq, Eq)]
+enum KeyInput {
+    Press(Key),
+    Text(char),
+}
+
+/// Maps AppKit's character event to the shared input calls. macOS reports the
+/// Delete key as DEL, while the drafts delete on the Backspace character the
+/// other shells deliver.
+fn key_input(character: char, control: bool, command: bool) -> Option<KeyInput> {
+    match character {
+        '\r' | '\u{3}' => Some(KeyInput::Press(Key::Enter)),
+        '\u{1b}' => Some(KeyInput::Press(Key::Escape)),
+        'a' | 'A' if control || command => Some(KeyInput::Press(Key::SelectAll)),
+        '\u{7f}' | '\u{8}' => Some(KeyInput::Text('\u{8}')),
+        _ if character.is_control() || command => None,
+        _ => Some(KeyInput::Text(character)),
+    }
+}
+
 thread_local! {
     /// The running application state. AppKit callbacks all run on the main
     /// thread, where this pointer is set for the lifetime of the run loop.
@@ -68,6 +88,15 @@ fn with_state(action: impl FnOnce(&mut State)) {
     if !state.is_null() {
         // SAFETY: the pointer is set in `run` and cleared before `State` drops.
         action(unsafe { &mut *state });
+    }
+}
+
+/// Clears the callback-visible pointer on normal exit, early errors and panic
+/// unwinding. It is declared after `State`, so it drops first.
+struct StateGuard;
+impl Drop for StateGuard {
+    fn drop(&mut self) {
+        STATE.with(|cell| cell.set(ptr::null_mut()));
     }
 }
 
@@ -102,22 +131,7 @@ pub fn main() {
 }
 
 fn run() -> Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    if let Some(unknown) = args
-        .iter()
-        .skip(1)
-        .find(|a| !matches!(a.as_str(), "--demo" | "--toggle"))
-    {
-        return Err(format!(
-            "unknown option {unknown} (options: --demo, --toggle)"
-        ));
-    }
-    let demo = args.iter().any(|a| a == "--demo");
-    let request = if args.iter().any(|a| a == "--toggle") {
-        instance::Request::Toggle
-    } else {
-        instance::Request::Open
-    };
+    let (demo, request) = super::parse_args()?;
     let socket = instance::socket_path().filter(|_| !demo);
     let instance = match &socket {
         Some(path) => match instance::acquire(path, request)
@@ -156,6 +170,7 @@ fn run() -> Result<()> {
         requests: Arc::new(Mutex::new(Vec::new())),
     });
     STATE.with(|cell| cell.set(&mut *state as *mut State));
+    let _state_guard = StateGuard;
 
     if !demo {
         let pending = state.pending.clone();
@@ -207,7 +222,6 @@ fn run() -> Result<()> {
     ensure_tray(&mut state.app);
     show(&mut state.app, true);
     app.run();
-    STATE.with(|cell| cell.set(ptr::null_mut()));
     state.app.shell.shutdown();
     Ok(())
 }
@@ -337,9 +351,9 @@ define_class!(
 
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
-            let control = event
-                .modifierFlags()
-                .contains(NSEventModifierFlags::Control);
+            let flags = event.modifierFlags();
+            let control = flags.contains(NSEventModifierFlags::Control);
+            let command = flags.contains(NSEventModifierFlags::Command);
             let Some(text) = event.characters() else {
                 with_state(|state| {
                     key_pressed(&mut state.app, Key::Other);
@@ -347,20 +361,14 @@ define_class!(
                 return;
             };
             for character in text.to_string().chars() {
-                let key = match character {
-                    '\r' | '\u{3}' => Some(Key::Enter),
-                    '\u{1b}' => Some(Key::Escape),
-                    'a' | 'A' if control => Some(Key::SelectAll),
-                    _ => None,
-                };
-                if let Some(key) = key {
-                    with_state(|state| {
+                match key_input(character, control, command) {
+                    Some(KeyInput::Press(key)) => with_state(|state| {
                         key_pressed(&mut state.app, key);
-                    });
-                } else if !character.is_control() {
-                    with_state(|state| {
+                    }),
+                    Some(KeyInput::Text(character)) => with_state(|state| {
                         text_typed(&mut state.app, character);
-                    });
+                    }),
+                    None => {}
                 }
             }
         }
@@ -471,6 +479,7 @@ define_class!(
 
         #[unsafe(method(resignKeyWindow))]
         fn resign_key(&self) {
+            RESIZE.with(|slot| slot.set(None));
             with_state(|state| {
                 focus_lost(&mut state.app);
                 pointer_capture_lost(&mut state.app);
@@ -1295,4 +1304,39 @@ fn monitor_by_index(index: usize) -> Rect {
         .nth(index)
         .map(|screen| screen_work(&screen))
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn appkit_delete_types_the_shared_backspace_character() {
+        assert_eq!(
+            key_input('\u{7f}', false, false),
+            Some(KeyInput::Text('\u{8}'))
+        );
+        assert_eq!(
+            key_input('\u{8}', false, false),
+            Some(KeyInput::Text('\u{8}'))
+        );
+    }
+
+    #[test]
+    fn select_all_accepts_command_and_control() {
+        assert_eq!(
+            key_input('a', true, false),
+            Some(KeyInput::Press(Key::SelectAll))
+        );
+        assert_eq!(
+            key_input('A', false, true),
+            Some(KeyInput::Press(Key::SelectAll))
+        );
+    }
+
+    #[test]
+    fn command_shortcuts_do_not_insert_text() {
+        assert_eq!(key_input('c', false, true), None);
+        assert_eq!(key_input('5', false, false), Some(KeyInput::Text('5')));
+    }
 }

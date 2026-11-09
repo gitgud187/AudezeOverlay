@@ -8,7 +8,7 @@ use super::*;
 pub(in crate::ui) enum Key {
     Enter,
     Escape,
-    /// Ctrl+A.
+    /// Ctrl+A (Command+A on macOS).
     SelectAll,
     Other,
 }
