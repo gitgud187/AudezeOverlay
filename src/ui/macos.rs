@@ -27,10 +27,11 @@ use objc2::{
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy,
     NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSCursor, NSEvent,
-    NSEventModifierFlags, NSImage, NSMenu, NSMenuItem, NSModalResponseOK, NSOpenPanel, NSSavePanel,
-    NSScreen, NSScreenSaverWindowLevel, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
-    NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
-    NSVisualEffectView, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSEventModifierFlags, NSEventType, NSImage, NSMenu, NSMenuItem, NSModalResponseOK, NSOpenPanel,
+    NSSavePanel, NSScreen, NSScreenSaverWindowLevel, NSStatusBar, NSStatusItem,
+    NSVariableStatusItemLength, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+    NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowCollectionBehavior,
+    NSWindowStyleMask,
 };
 use objc2_core_foundation::{CFData, CFRetained};
 use objc2_core_graphics::{
@@ -65,14 +66,21 @@ enum KeyInput {
 
 /// Maps AppKit's character event to the shared input calls. macOS reports the
 /// Delete key as DEL, while the drafts delete on the Backspace character the
-/// other shells deliver.
-fn key_input(character: char, control: bool, command: bool) -> Option<KeyInput> {
+/// other shells deliver. AppKit encodes arrows, Home/End, function keys and
+/// forward-delete in the Unicode private-use range; those are commands, not
+/// text, so they must not reach a draft.
+fn key_input(character: char, select_all: bool, command: bool) -> Option<KeyInput> {
     match character {
         '\r' | '\u{3}' => Some(KeyInput::Press(Key::Enter)),
         '\u{1b}' => Some(KeyInput::Press(Key::Escape)),
-        'a' | 'A' if control || command => Some(KeyInput::Press(Key::SelectAll)),
+        _ if select_all => Some(KeyInput::Press(Key::SelectAll)),
         '\u{7f}' | '\u{8}' => Some(KeyInput::Text('\u{8}')),
-        _ if character.is_control() || command => None,
+        _ if character.is_control()
+            || ('\u{f700}'..='\u{f8ff}').contains(&character)
+            || command =>
+        {
+            None
+        }
         _ => Some(KeyInput::Text(character)),
     }
 }
@@ -191,17 +199,15 @@ fn run() -> Result<()> {
         ));
     }
 
-    if let Some(instance) = instance {
-        instance
-            .listener
-            .set_nonblocking(false)
-            .map_err(|e| e.to_string())?;
+    if let Some(instance) = &instance {
+        let listener = instance.listener.try_clone().map_err(|e| e.to_string())?;
+        listener.set_nonblocking(false).map_err(|e| e.to_string())?;
         let requests = state.requests.clone();
         let wake = core.borrow().redraw as usize;
         thread::Builder::new()
             .name("instance-listener".into())
             .spawn(move || {
-                for stream in instance.listener.incoming() {
+                for stream in listener.incoming() {
                     let Ok(stream) = stream else {
                         continue;
                     };
@@ -222,6 +228,9 @@ fn run() -> Result<()> {
     ensure_tray(&mut state.app);
     show(&mut state.app, true);
     app.run();
+    // Dropping the owner unlinks the socket on a normal quit; the cloned
+    // listener in the thread dies with the process.
+    drop(instance);
     state.app.shell.shutdown();
     Ok(())
 }
@@ -354,6 +363,12 @@ define_class!(
             let flags = event.modifierFlags();
             let control = flags.contains(NSEventModifierFlags::Control);
             let command = flags.contains(NSEventModifierFlags::Command);
+            // Control+A arrives as U+0001 in `characters`; only the unmodified
+            // character still identifies the A key.
+            let select_all = (control || command)
+                && event
+                    .charactersIgnoringModifiers()
+                    .is_some_and(|text| text.to_string().eq_ignore_ascii_case("a"));
             let Some(text) = event.characters() else {
                 with_state(|state| {
                     key_pressed(&mut state.app, Key::Other);
@@ -361,7 +376,7 @@ define_class!(
                 return;
             };
             for character in text.to_string().chars() {
-                match key_input(character, control, command) {
+                match key_input(character, select_all, command) {
                     Some(KeyInput::Press(key)) => with_state(|state| {
                         key_pressed(&mut state.app, key);
                     }),
@@ -479,6 +494,22 @@ define_class!(
 
         #[unsafe(method(resignKeyWindow))]
         fn resign_key(&self) {
+            // A modal alert/panel/menu can take key order while the shared app
+            // holds &mut App. Calling focus_lost inline would alias that borrow,
+            // so defer to the default run-loop mode, which resumes after the
+            // modal loop returns.
+            unsafe {
+                let _: () = msg_send![
+                    self,
+                    performSelector: sel!(focusLostLater:),
+                    withObject: None::<&AnyObject>,
+                    afterDelay: 0.0f64
+                ];
+            }
+        }
+
+        #[unsafe(method(focusLostLater:))]
+        fn focus_lost_later(&self, _: Option<&AnyObject>) {
             RESIZE.with(|slot| slot.set(None));
             with_state(|state| {
                 focus_lost(&mut state.app);
@@ -658,6 +689,7 @@ impl Core {
         effect.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
         effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
         effect.setState(NSVisualEffectState::Active);
+        effect.setWantsLayer(true);
         effect.setFrame(content);
         effect.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable
@@ -712,18 +744,25 @@ impl Core {
         })
     }
     fn present(&mut self) {
-        let Some(layer) = &self.layer else {
-            return;
-        };
-        if let Some(frame) = &self.frame {
-            let contents: &AnyObject = (**frame).as_ref();
-            unsafe { layer.setContents(Some(contents)) };
-            let scale = self.window.backingScaleFactor();
-            layer.setContentsScale(scale);
-            layer.setCornerRadius(f64::from(self.corners) / 2.0 / scale);
-            layer.setMasksToBounds(self.corners > 0);
+        let scale = self.window.backingScaleFactor();
+        let radius = f64::from(self.corners) / 2.0 / scale;
+        let masked = self.corners > 0;
+        if let Some(layer) = &self.layer {
+            if let Some(frame) = &self.frame {
+                let contents: &AnyObject = (**frame).as_ref();
+                unsafe { layer.setContents(Some(contents)) };
+                layer.setContentsScale(scale);
+            }
+            layer.setCornerRadius(radius);
+            layer.setMasksToBounds(masked);
+            layer.setOpacity(f32::from(self.alpha) / 255.0);
         }
-        layer.setOpacity(f32::from(self.alpha) / 255.0);
+        // The visual effect view is a full rectangle behind the overlay; mask it
+        // too so blur cannot show past the overlay's rounded corners.
+        if let Some(effect_layer) = self.effect.layer() {
+            effect_layer.setCornerRadius(radius);
+            effect_layer.setMasksToBounds(masked);
+        }
     }
     fn stop_timer(&mut self, index: usize) {
         if let Some(timer) = self.timers.get_mut(index).and_then(Option::take) {
@@ -750,7 +789,23 @@ struct MacShell {
 }
 impl MacShell {
     fn quit_now(&self) {
-        NSApplication::sharedApplication(mtm()).stop(None);
+        let app = NSApplication::sharedApplication(mtm());
+        app.stop(None);
+        // `stop` only takes effect after the current event. A source or timer
+        // callback is not an event, so post one to wake `nextEvent`.
+        if let Some(event) = NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
+            NSEventType::ApplicationDefined,
+            NSPoint::new(0., 0.),
+            NSEventModifierFlags::empty(),
+            0.,
+            0,
+            None,
+            0,
+            0,
+            0,
+        ) {
+            app.postEvent_atStart(&event, true);
+        }
     }
 }
 
@@ -1323,15 +1378,24 @@ mod tests {
     }
 
     #[test]
-    fn select_all_accepts_command_and_control() {
+    fn select_all_uses_the_unmodified_character() {
+        // Control+A: characters() is U+0001, while the unmodified key is "a".
         assert_eq!(
-            key_input('a', true, false),
+            key_input('\u{1}', true, false),
             Some(KeyInput::Press(Key::SelectAll))
         );
         assert_eq!(
-            key_input('A', false, true),
+            key_input('a', true, true),
             Some(KeyInput::Press(Key::SelectAll))
         );
+        assert_eq!(key_input('a', false, false), Some(KeyInput::Text('a')));
+    }
+
+    #[test]
+    fn navigation_and_function_keys_are_not_text() {
+        for character in ['\u{f700}', '\u{f704}', '\u{f728}', '\u{f729}'] {
+            assert_eq!(key_input(character, false, false), None, "{character:?}");
+        }
     }
 
     #[test]

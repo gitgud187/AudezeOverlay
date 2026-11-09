@@ -58,7 +58,8 @@ impl Drop for Instance {
 
 /// Where the socket lives: inside the sandbox's own runtime directory in a
 /// Flatpak, else directly in the user's runtime directory. macOS uses the
-/// per-user temporary directory.
+/// Application Support directory; its 104-byte `sun_path` limit means a very
+/// long home path fails startup rather than silently allowing two instances.
 #[cfg(target_os = "linux")]
 pub(in crate::ui) fn socket_path() -> Option<PathBuf> {
     let runtime = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?);
