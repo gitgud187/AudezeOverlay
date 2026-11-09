@@ -74,7 +74,6 @@ Remaining:
 
 - Keyboard and text entry, focus-loss handling, edge resize and cursor changes
   are wired but not yet exercised end to end.
-- Native menus, alerts and open/save panels.
 
 **Exit:** `--demo` shows and hides a correct overlay on a Retina display and on a
 second display, including window movement across screens.
@@ -97,8 +96,8 @@ Skipped:
 
 Remaining:
 
-- Native menus, alerts and open/save panels.
-- Profile import/export through a native open/save panel.
+- Profile import/export through the native open/save panels is wired but not
+  visually exercised end to end.
 
 **Exit:** tray, autostart, profile import/export and one running instance. A
 global shortcut is explicitly out of scope for the first macOS release.

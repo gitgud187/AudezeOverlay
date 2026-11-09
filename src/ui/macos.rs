@@ -529,6 +529,80 @@ impl TrayTarget {
     }
 }
 
+thread_local! {
+    static MENU_SELECTION: Cell<Option<u32>> = const { Cell::new(None) };
+}
+
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements and the target is only
+    // used from AppKit's main thread.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "AudezeOverlayMenuTarget"]
+    struct MenuTarget;
+
+    impl MenuTarget {
+        #[unsafe(method(pick:))]
+        fn pick(&self, sender: &NSMenuItem) {
+            MENU_SELECTION.with(|cell| cell.set(Some(sender.tag() as u32)));
+        }
+    }
+);
+
+impl MenuTarget {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = mtm.alloc::<Self>().set_ivars(());
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
+fn build_menu(
+    entries: &[MenuEntry],
+    target: &MenuTarget,
+    mtm: MainThreadMarker,
+) -> Retained<NSMenu> {
+    let menu = NSMenu::new(mtm);
+    for entry in entries {
+        match entry {
+            MenuEntry::Item {
+                id,
+                label,
+                checked,
+                enabled,
+            } => {
+                let item = unsafe {
+                    NSMenuItem::initWithTitle_action_keyEquivalent(
+                        mtm.alloc(),
+                        &NSString::from_str(label),
+                        Some(sel!(pick:)),
+                        &NSString::from_str(""),
+                    )
+                };
+                unsafe { item.setTarget(Some(target as &AnyObject)) };
+                item.setTag(*id as isize);
+                item.setEnabled(*enabled);
+                item.setState(if *checked { 1 } else { 0 });
+                menu.addItem(&item);
+            }
+            MenuEntry::Separator => menu.addItem(&NSMenuItem::separatorItem(mtm)),
+            MenuEntry::Submenu { label, entries } => {
+                let item = unsafe {
+                    NSMenuItem::initWithTitle_action_keyEquivalent(
+                        mtm.alloc(),
+                        &NSString::from_str(label),
+                        None,
+                        &NSString::from_str(""),
+                    )
+                };
+                let submenu = build_menu(entries, target, mtm);
+                item.setSubmenu(Some(&submenu));
+                menu.addItem(&item);
+            }
+        }
+    }
+    menu
+}
+
 struct Core {
     window: Retained<OverlayWindow>,
     view: Retained<OverlayView>,
@@ -1036,8 +1110,23 @@ impl Shell for MacShell {
         }
         monitor_by_index(0)
     }
-    fn popup_menu(&mut self, _: &[MenuEntry], _: MenuOrigin) -> Option<u32> {
-        None
+    fn popup_menu(&mut self, entries: &[MenuEntry], _: MenuOrigin) -> Option<u32> {
+        if entries.is_empty() {
+            return None;
+        }
+        let mtm = mtm();
+        let target = MenuTarget::new(mtm);
+        let menu = build_menu(entries, &target, mtm);
+        let (window, view) = {
+            let core = self.core.borrow();
+            (core.window.clone(), core.view.clone())
+        };
+        let screen = NSEvent::mouseLocation();
+        let window_point = window.convertPointFromScreen(screen);
+        let location = view.convertPoint_fromView(window_point, None);
+        MENU_SELECTION.with(|cell| cell.set(None));
+        menu.popUpMenuPositioningItem_atLocation_inView(None, location, Some(&view));
+        MENU_SELECTION.with(Cell::get)
     }
     fn confirm(&mut self, title: &str, message: &str, buttons: Buttons) -> Choice {
         let alert = NSAlert::new(mtm());

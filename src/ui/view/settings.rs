@@ -475,6 +475,37 @@ pub(super) fn settings_page(
                     false,
                     false,
                 );
+            } else if cfg!(target_os = "macos") {
+                for (top, line, size, color) in [
+                    (
+                        272.,
+                        "Global shortcuts are not available on macOS yet.",
+                        18.,
+                        FG,
+                    ),
+                    (
+                        306.,
+                        "Use the menu bar icon to show or hide the overlay.",
+                        15.,
+                        SUB,
+                    ),
+                    (
+                        336.,
+                        "Or run this command from a launcher or a key binding tool:",
+                        15.,
+                        SUB,
+                    ),
+                    (376., "audeze-overlay --toggle", 16., FG),
+                ] {
+                    c.text(
+                        line,
+                        Box2::new(218., top, w - 250., 28.),
+                        size,
+                        color,
+                        false,
+                        false,
+                    );
+                }
             } else {
                 // The desktop owns global shortcuts here; it shows and changes them.
                 for (top, line, size, color) in [

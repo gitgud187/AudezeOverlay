@@ -95,15 +95,20 @@ not a kernel size. The settings toggle continues to work.
 
 ## 2026-11-09 — Native modals
 
-**Decision:** Use `NSAlert` for confirmations and `NSOpenPanel`/`NSSavePanel`
-(modally) for profile files. `popup_menu` remains unimplemented for now.
+**Decision:** Use `NSAlert` for confirmations, `NSOpenPanel`/`NSSavePanel`
+(modally) for profile files, and an `NSMenu` with a target/action for
+`popup_menu`.
 
 **Why:** The `Shell` contract is synchronous; modal AppKit calls fit it. The
-deprecated `setAllowedFileTypes` is used with a local `allow(deprecated)` rather
-than adding the UniformTypeIdentifiers crate.
+menu action records the chosen tag in a thread-local before `popUpMenu` returns.
+The deprecated `setAllowedFileTypes` is used with a local `allow(deprecated)`
+rather than adding the UniformTypeIdentifiers crate.
 
-**Consequences:** File selection returns `FileSelection::Ready`. Card/EQ popup
-menus still need a native `NSMenu` implementation.
+**Consequences:** File selection returns `FileSelection::Ready`; card/EQ menus
+use the same target-action pattern as the status menu. The popup path compiles
+and clippy passes, but the display was asleep during the visual check, so it
+still needs one manual look. The Shortcuts settings tab explains that macOS has
+no global shortcut instead of offering a recorder.
 
 ## 2026-11-09 — Launch at login
 
@@ -180,7 +185,6 @@ use synthetic sockets, not hardware.
 
 - Revisit the global shortcut with a deferred Carbon callback or an
   `NSEvent` monitor.
-- Implement native card/EQ popup menus.
 - Decide whether to ship a universal binary and notarize it.
 - Decide whether a second display and Stage Manager/Mission Control need
   additional coordinate handling.
