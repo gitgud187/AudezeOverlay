@@ -158,7 +158,7 @@ edit followed by clicking another app was verified without a crash.
 
 ## 2026-11-09 — CI and release integration
 
-**Decision:** Add a `macos-14` workflow that runs formatting, clippy, all-target
+**Decision:** Add a `macos-15` workflow that runs formatting, clippy, all-target
 tests, release builds, layout previews and the bundle script, then uploads the
 app. The release job waits for it, downloads
 `Audeze-Overlay-macOS-arm64.zip`, and includes it in the published assets and
