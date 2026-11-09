@@ -23,13 +23,17 @@ function Assert-Checksums([string]$Directory, [string]$Manifest, [string[]]$Name
 $windows = Join-Path $ArtifactRoot 'windows'
 $linux = Join-Path $ArtifactRoot 'linux'
 $flatpak = Join-Path $ArtifactRoot 'flatpak'
+$macos = Join-Path $ArtifactRoot 'macos'
 $windowsNames = @('Audeze-Overlay-Setup.exe', 'Audeze-Overlay-Portable.zip')
 $linuxName = 'Audeze-Overlay-Linux-x86_64.tar.gz'
+$macosName = 'Audeze-Overlay-macOS-arm64.zip'
 Assert-Checksums $windows 'SHA256SUMS.txt' $windowsNames
 Assert-Checksums $linux "$linuxName.sha256" @($linuxName)
+Assert-Checksums $macos "$macosName.sha256" @($macosName)
 $sources = @($windowsNames | ForEach-Object { Join-Path $windows $_ })
 $sources += Join-Path $linux $linuxName
 $sources += Join-Path $flatpak 'Audeze-Overlay.flatpak'
+$sources += Join-Path $macos $macosName
 foreach ($source in $sources) {
     if ((Get-Item -LiteralPath $source).Length -le 0) { throw "Empty package: $source" }
 }

@@ -25,13 +25,14 @@ function Reset-Fixture {
     }
     Set-Content -LiteralPath (Join-Path $testDirectory 'highlights.md') -Value 'Hear EQ changes live and keep your favorite profiles.'
     $artifactRoot = Join-Path $testDirectory 'artifacts'
-    foreach ($platform in @('windows', 'linux', 'flatpak')) {
+    foreach ($platform in @('windows', 'linux', 'flatpak', 'macos')) {
         $null = New-Item -ItemType Directory -Force -Path (Join-Path $artifactRoot $platform)
     }
     $groups = @{
         windows = @('Audeze-Overlay-Setup.exe', 'Audeze-Overlay-Portable.zip')
         linux = @('Audeze-Overlay-Linux-x86_64.tar.gz')
         flatpak = @('Audeze-Overlay.flatpak')
+        macos = @('Audeze-Overlay-macOS-arm64.zip')
     }
     foreach ($platform in $groups.Keys) {
         $directory = Join-Path $artifactRoot $platform
@@ -42,6 +43,7 @@ function Reset-Fixture {
         }
         if ($platform -eq 'windows') { $lines | Set-Content -LiteralPath (Join-Path $directory 'SHA256SUMS.txt') }
         if ($platform -eq 'linux') { $lines | Set-Content -LiteralPath (Join-Path $directory 'Audeze-Overlay-Linux-x86_64.tar.gz.sha256') }
+        if ($platform -eq 'macos') { $lines | Set-Content -LiteralPath (Join-Path $directory 'Audeze-Overlay-macOS-arm64.zip.sha256') }
     }
     & "$PSScriptRoot/prepare-release-downloads.ps1" -ArtifactRoot $artifactRoot -OutputDirectory $testDirectory
 }
@@ -142,9 +144,11 @@ try {
     foreach ($name in @('Audeze-Overlay-Linux-x86_64.tar.gz', 'Audeze-Overlay.flatpak')) {
         Assert-That ($new.body.Contains("/download/$global:AudezeReleaseTesttag/$name")) 'Linux link points to a different release'
     }
+    Assert-That ($new.body.Contains("/download/$global:AudezeReleaseTesttag/Audeze-Overlay-macOS-arm64.zip")) 'macOS link points to a different release'
+    Assert-That ($new.body.Contains('not notarized')) 'macOS signing caveat missing'
     Assert-That ($new.body.Contains('experimental') -and $new.body.Contains("/blob/$global:AudezeReleaseTesttag/docs/LINUX.md#install")) 'Linux caveats or versioned instructions missing'
     $checksums = @(Get-Content -LiteralPath (Join-Path $testDirectory 'SHA256SUMS.txt'))
-    Assert-That ($checksums.Count -eq 4) 'Combined checksum manifest does not cover all downloads'
+    Assert-That ($checksums.Count -eq 5) 'Combined checksum manifest does not cover all downloads'
     foreach ($line in $checksums) {
         $hash, $name = $line -split '  ', 2
         Assert-That ((Get-FileHash -LiteralPath (Join-Path $testDirectory $name)).Hash -eq $hash) 'Combined checksum is incorrect'

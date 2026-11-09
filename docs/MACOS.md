@@ -2,10 +2,12 @@
 
 [Back to documentation](README.md)
 
-> **Status: in progress.** The HID transport and the first AppKit window shell
-> are implemented; the overlay shows live headset data on a Retina display.
-> Pointer/keyboard interaction, desktop integration and packaging remain. The
-> Linux port is the reference for scope and validation; see [Linux](LINUX.md).
+> **Status: working build.** The HID transport, window shell, pointer input,
+> status item, single instance, launch at login, native file panels/alerts and
+> backdrop blur are implemented. The `.app` bundle and macOS CI are in place.
+> Remaining work is signing/notarization, a universal binary, native popup
+> menus, and more display/hardware evidence. The Linux port is the reference
+> for scope and validation; see [Linux](LINUX.md).
 
 ## Goal
 
@@ -101,24 +103,35 @@ Remaining:
 **Exit:** tray, autostart, profile import/export and one running instance. A
 global shortcut is explicitly out of scope for the first macOS release.
 
-### 5. Fullscreen, Spaces and blur
+### 5. Fullscreen, Spaces and blur — done, with limits
 
-- Test the overlay above Space-based fullscreen games, Mission Control and
-  Stage Manager; document that games taking exclusive display capture cannot be
-  overlaid.
-- Map blur to `NSVisualEffectView` (on/off, like the compositor blur on Linux).
+- Verified above a fullscreen terminal: the overlay stayed visible while the
+  menu bar was hidden (`canJoinAllSpaces` and `fullScreenAuxiliary`).
+- Blur is an `NSVisualEffectView` behind the overlay (on/off, like the Linux
+  compositor blur). Verified with an A/B capture at low background opacity:
+  sharp terminal text with blur off, visibly diffused text with blur on.
 
-**Exit:** a written statement of what macOS does and does not cover, with the
-same honesty as the GNOME/layer-shell caveat.
+**Limits:** Mission Control, Stage Manager, mixed-scale multi-display Spaces and
+games that take exclusive display capture were not tested. An exclusive-capture
+game cannot be overlaid, as on any platform.
 
-### 6. Packaging and release
+### 6. Packaging and release — in progress
 
-- `packaging/macos/`: `Info.plist` (`LSUIElement`), `.icns`, `.app` assembly,
-  universal binary, zip/dmg and checksum.
-- Code signing and notarization for a public download; ad-hoc signing is enough
-  for CI artifacts.
-- New macOS CI workflow called from the release workflow; add the macOS archive
-  to the publish scripts and release notes.
+Done:
+
+- `packaging/macos/`: `Info.plist` (`LSUIElement`), icon generated from the
+  existing vector, `.app` assembly, ad-hoc signature and a zipped archive with a
+  checksum.
+- `.github/workflows/macos.yml` builds, tests, lints, renders previews, packages
+  and uploads the app; the release workflow downloads the macOS artifact and the
+  publish scripts include it in the release assets and notes.
+- Verified locally: the bundle launches with no Dock icon, renders, and forwards
+  `--toggle` to the running instance.
+
+Remaining:
+
+- Developer ID signing and notarization for a public download.
+- Universal (arm64 + x86_64) binary; CI currently builds thin arm64.
 - Turn this page into the support guide, with hardware evidence and install
   instructions, mirroring the structure of [LINUX.md](LINUX.md).
 

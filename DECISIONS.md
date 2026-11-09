@@ -147,6 +147,35 @@ must not fail startup. Parsing once at startup lets the next candidate win.
 focus-loss and shortcut handling are wired on macOS. Suppressing them locally
 keeps the macOS build clean for CI without deleting shared behavior.
 
+## 2026-11-09 — CI and release integration
+
+**Decision:** Add a `macos-14` workflow that runs formatting, clippy, all-target
+tests, release builds, layout previews and the bundle script, then uploads the
+app. The release job waits for it, downloads
+`Audeze-Overlay-macOS-arm64.zip`, and includes it in the published assets and
+notes.
+
+**Why:** It mirrors the Linux workflow and keeps the macOS artifact in the same
+tested run as the other packages.
+
+**Consequences:** CI builds a thin arm64 bundle. A universal binary and
+notarization are release follow-ups. The release scripts were updated but have
+not run on GitHub yet.
+
+## 2026-11-09 — Evidence limits
+
+**Decision:** Document the tested display and hardware rather than implying
+broader coverage.
+
+**Why:** All work was verified on one Retina display and one Maxwell Xbox dongle
+(`3329:4b18`, headset and dongle firmware v1.0.1.74). No second display,
+Mission Control, Stage Manager, exclusive-capture game, other headset model or
+other firmware was available.
+
+**Consequences:** The support page must say that multi-display coordinates,
+other identities and exclusive fullscreen remain unverified. The instance tests
+use synthetic sockets, not hardware.
+
 ## Open decisions
 
 - Revisit the global shortcut with a deferred Carbon callback or an
