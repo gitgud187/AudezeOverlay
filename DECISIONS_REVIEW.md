@@ -64,15 +64,21 @@ including deletion; navigation keys are ignored; Command+A works. Tests cover
 DEL, `U+0001` Control+A, Command+A, function/arrow codes and a Command shortcut
 that must not insert text.
 
-### Mask the blur layer to the rounded corners
+### Shape the blur with a cap-inset mask image
 
-**Decision:** Enable a layer on `NSVisualEffectView` and apply the same corner
-radius and `masksToBounds` used by the overlay layer.
+**Decision:** Give `NSVisualEffectView` a small rounded-corner `NSImage` with
+`capInsets` set to the corner radius and `resizingMode` stretch. Do not rely on
+a layer corner radius, and do not build a full-size mask.
 
-**Why:** The effect view is a full rectangle behind the overlay. With blur on,
-the effect could show square corners outside the rounded overlay. The display
-was locked during this pass, so this is verified by construction, not a new
-screenshot.
+**Why:** With the display unlocked, an exact window capture showed the effect
+layer still opaque outside the overlay's rounded corner; the layer radius did
+not clip the behind-window material. Apple documents `maskImage` as the
+supported shape and recommends a small mask with cap insets. A full-size mask
+also did not apply correctly; the corner image with insets does.
+
+**Consequences:** The mask is rebuilt only when the clip diameter or backing
+scale changes, not per frame. The screen check shows the blur corner matching
+the overlay curve; the effect still makes the interior opaque, as expected.
 
 ### Remove the transient allocation from asset lookup
 
@@ -198,20 +204,24 @@ callback pointer depended on that accident.
 
 ### Defer focus-loss handling out of modal loops
 
-**Decision:** `resignKeyWindow` no longer calls `focus_lost` inline. It schedules
-a `focusLostLater:` selector with `performSelector:withObject:afterDelay:` in
-the default run-loop mode; that method clears the pending resize and notifies
-the shared app.
+**Decision:** Call `super` from `resignKeyWindow`, then schedule a
+`focusLostLater:` selector with `performSelector:withObject:afterDelay:` in the
+default run-loop mode. The deferred method returns early if the window is key
+again; otherwise it clears the pending resize and notifies the shared app.
 
 **Why:** `confirm`, `choose_file` and `popup_menu` run modal AppKit loops while
 the shared app is borrowed as `&mut App`. When a modal takes key status,
 `resignKeyWindow` fired and entered `with_state`, creating a second mutable
 borrow of `State` while the first was live. Deferring to the post-modal run-loop
 turn avoids the alias; timers already use the default mode, so they do not fire
-inside these modal loops.
+inside these modal loops. Skipping `super` also left NSWindow's key-window
+bookkeeping and `NSWindowDidResignKeyNotification` undone. The key check avoids
+committing a draft when focus returned before the deferred call.
 
 **Consequences:** Focus and pointer-capture loss are delivered one run-loop turn
-later on normal deactivation. The resize drag is cleared in the deferred method.
+later on normal deactivation; an edit committed after a modal is not committed
+again if the overlay is key. The order change (commit after the modal rather
+than before it) remains, but the stale-focus path no longer commits.
 
 ### Wake AppKit after stopping the run loop
 
@@ -282,11 +292,18 @@ mounts, contains the `Applications` symlink, and its app passes strict signature
 verification. The bundled app created the expected socket and forwarded
 `--toggle` with exit 0.
 
-Runtime limits: the display was locked, so the blur corner mask and the
-modal/focus deferral were verified by construction and tests, not by a new
-visual or modal interaction. Normal-quit socket unlinking uses the existing
-`Instance` drop path (covered by the instance tests) but was not exercised
-through the UI; the process was stopped externally after the smoke test.
+Runtime checks: the display was unlocked for this pass. Exact window captures
+with blur off and on showed the rounded overlay corner, then the blur still
+filling outside it; after switching to the cap-inset mask, the corner image
+matched and the blur's outside-corner alpha matched the blur-off value. A
+synthetic click inside the overlay, outside it, and back exercised
+`resignKeyWindow` (including the `super` call) without a crash. The modal
+staleness path was not forced interactively; it is covered by the key check and
+code review.
+
+Normal-quit socket unlinking uses the existing `Instance` drop path (covered by
+the instance tests) but was not exercised through the UI; the process was
+stopped externally after the smoke tests.
 
 CI result: run `42708533527` passed the Windows build, Linux check, Flatpak and
 macOS check jobs, including the new HID and key tests and DMG

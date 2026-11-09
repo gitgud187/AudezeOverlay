@@ -27,18 +27,20 @@ use objc2::{
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy,
     NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSCursor, NSEvent,
-    NSEventModifierFlags, NSEventType, NSImage, NSMenu, NSMenuItem, NSModalResponseOK, NSOpenPanel,
-    NSSavePanel, NSScreen, NSScreenSaverWindowLevel, NSStatusBar, NSStatusItem,
-    NSVariableStatusItemLength, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
-    NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowCollectionBehavior,
-    NSWindowStyleMask,
+    NSEventModifierFlags, NSEventType, NSImage, NSImageResizingMode, NSMenu, NSMenuItem,
+    NSModalResponseOK, NSOpenPanel, NSSavePanel, NSScreen, NSScreenSaverWindowLevel, NSStatusBar,
+    NSStatusItem, NSVariableStatusItemLength, NSView, NSVisualEffectBlendingMode,
+    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow,
+    NSWindowCollectionBehavior, NSWindowStyleMask,
 };
-use objc2_core_foundation::{CFData, CFRetained};
+use objc2_core_foundation::{CFData, CFRetained, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
-    CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage, CGImageAlphaInfo,
+    CGBitmapContextCreate, CGBitmapContextCreateImage, CGBitmapInfo, CGColorRenderingIntent,
+    CGColorSpace, CGContext, CGDataProvider, CGImage, CGImageAlphaInfo, CGPath,
 };
 use objc2_foundation::{
-    NSArray, NSObject, NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect, NSSize, NSString,
+    NSArray, NSEdgeInsets, NSObject, NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect,
+    NSSize, NSString,
 };
 use objc2_service_management::SMAppService;
 use std::{
@@ -494,6 +496,11 @@ define_class!(
 
         #[unsafe(method(resignKeyWindow))]
         fn resign_key(&self) {
+            // NSWindow does its own key-window bookkeeping and posts the
+            // notification here; skipping super leaves a half-resigned window.
+            unsafe {
+                let _: () = msg_send![super(self), resignKeyWindow];
+            }
             // A modal alert/panel/menu can take key order while the shared app
             // holds &mut App. Calling focus_lost inline would alias that borrow,
             // so defer to the default run-loop mode, which resumes after the
@@ -510,6 +517,11 @@ define_class!(
 
         #[unsafe(method(focusLostLater:))]
         fn focus_lost_later(&self, _: Option<&AnyObject>) {
+            // Focus may have returned before the deferred call (for example
+            // after a modal). Do not commit an edit that is still active.
+            if self.isKeyWindow() {
+                return;
+            }
             RESIZE.with(|slot| slot.set(None));
             with_state(|state| {
                 focus_lost(&mut state.app);
@@ -757,12 +769,59 @@ impl Core {
             layer.setMasksToBounds(masked);
             layer.setOpacity(f32::from(self.alpha) / 255.0);
         }
-        // The visual effect view is a full rectangle behind the overlay; mask it
-        // too so blur cannot show past the overlay's rounded corners.
-        if let Some(effect_layer) = self.effect.layer() {
-            effect_layer.setCornerRadius(radius);
-            effect_layer.setMasksToBounds(masked);
+    }
+    /// `NSVisualEffectView` documents `maskImage` as the supported way to shape
+    /// a behind-window material. A layer corner radius is inconsistent across
+    /// macOS versions. The mask is one corner-size image with cap insets, so
+    /// AppKit stretches the center and keeps all four corners sharp.
+    fn update_blur_mask(&self) {
+        if self.corners <= 0 {
+            self.effect.setMaskImage(None);
+            return;
         }
+        let scale = window_scale(&self.window);
+        let logical = f64::from(self.corners) / scale;
+        let pixels = self.corners.max(2) as usize;
+        let radius = pixels as f64 / 2.;
+        let Some(space) = CGColorSpace::new_device_rgb() else {
+            return;
+        };
+        let info = CGBitmapInfo(CGImageAlphaInfo::PremultipliedLast.0);
+        let Some(context) = (unsafe {
+            CGBitmapContextCreate(
+                ptr::null_mut(),
+                pixels,
+                pixels,
+                8,
+                pixels * 4,
+                Some(&space),
+                info.0,
+            )
+        }) else {
+            return;
+        };
+        let rect = CGRect::new(
+            CGPoint::new(0., 0.),
+            CGSize::new(pixels as f64, pixels as f64),
+        );
+        CGContext::clear_rect(Some(&context), rect);
+        let path = unsafe { CGPath::with_rounded_rect(rect, radius, radius, ptr::null()) };
+        CGContext::add_path(Some(&context), Some(&path));
+        CGContext::fill_path(Some(&context));
+        let Some(image) = CGBitmapContextCreateImage(Some(&context)) else {
+            return;
+        };
+        let mask =
+            NSImage::initWithCGImage_size(mtm().alloc(), &image, NSSize::new(logical, logical));
+        let inset = logical / 2.;
+        mask.setCapInsets(NSEdgeInsets {
+            top: inset,
+            left: inset,
+            bottom: inset,
+            right: inset,
+        });
+        mask.setResizingMode(NSImageResizingMode(1));
+        self.effect.setMaskImage(Some(&mask));
     }
     fn stop_timer(&mut self, index: usize) {
         if let Some(timer) = self.timers.get_mut(index).and_then(Option::take) {
@@ -1125,7 +1184,9 @@ impl Shell for MacShell {
         }
     }
     fn clip_rounded(&mut self, diameter: i32) {
-        self.core.borrow_mut().corners = diameter;
+        let mut core = self.core.borrow_mut();
+        core.corners = diameter;
+        core.update_blur_mask();
     }
     fn quit_later(&self) {
         self.quit_now();
