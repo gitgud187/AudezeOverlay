@@ -1,13 +1,39 @@
-# macOS port plan
+# macOS build and port status
 
 [Back to documentation](README.md)
 
-> **Status: working build.** The HID transport, window shell, pointer input,
-> status item, single instance, launch at login, native file panels/alerts and
-> backdrop blur are implemented. The `.app` bundle and macOS CI are in place.
-> Remaining work is signing/notarization, a universal binary, native popup
-> menus, and more display/hardware evidence. The Linux port is the reference
+> **Status: working build, experimental.** The HID transport, window shell,
+> pointer input, status item, single instance, launch at login, native menus,
+> file panels/alerts and backdrop blur are implemented. The `.app` bundle and
+> macOS CI are in place. Remaining work is signing/notarization, a universal
+> binary, and more display/hardware evidence. The Linux port is the reference
 > for scope and validation; see [Linux](LINUX.md).
+
+## Install and use
+
+The current build is **Apple silicon (arm64)**, ad-hoc signed and not notarized.
+From a checkout:
+
+```sh
+cargo build --release
+packaging/macos/package-macos.sh
+open "dist/Audeze Overlay.app"
+```
+
+Gatekeeper may ask you to open it from the context menu, or allow it under
+System Settings → Privacy & Security. The app has no Dock icon; quit it from the
+menu bar icon.
+
+- `--demo` shows sample headset data and never opens the device.
+- `--toggle` shows or hides the panel of an already running instance.
+- No driver, udev rule or Accessibility permission is needed.
+- Launch at login uses `SMAppService` and requires macOS 13 or newer.
+- The global shortcut is not available on macOS yet; the menu bar icon and
+  `--toggle` are the ways to show or hide the panel.
+
+Requirements: macOS 11 or newer on Apple silicon for this archive. The supported
+headset identities and their validation limits are the same as Windows and
+Linux; see [Device profiles](DEVICE_PROTOCOL.md).
 
 ## Goal
 
@@ -84,20 +110,17 @@ Done:
 
 - Status item with the template logo and a menu for Open, Settings, Reset
   position, Hide and Quit; menu actions were verified by keyboard selection.
-- Launch at login through `SMAppService` (macOS 13+); success still needs an
-  app bundle, so only the code path is in place.
+- Launch at login through `SMAppService` (macOS 13+); verified in the local
+  bundle, where macOS added and then removed the login item.
 - One running instance and `--toggle`, shared with the Wayland shell.
+- Native menus, alerts and profile import/export; verified by opening
+  “Profiles…” → “Import from file…”, which presents a real `NSOpenPanel`.
 
 Skipped:
 
 - Global shortcut. Carbon registration succeeded, but its callback ran while
   the UI state was borrowed and aborted the process. The shortcut is disabled on
   macOS rather than shipped half-working; revisit with a deferred event.
-
-Remaining:
-
-- Profile import/export through the native open/save panels is wired but not
-  visually exercised end to end.
 
 **Exit:** tray, autostart, profile import/export and one running instance. A
 global shortcut is explicitly out of scope for the first macOS release.

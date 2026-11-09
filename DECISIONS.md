@@ -105,10 +105,10 @@ The deprecated `setAllowedFileTypes` is used with a local `allow(deprecated)`
 rather than adding the UniformTypeIdentifiers crate.
 
 **Consequences:** File selection returns `FileSelection::Ready`; card/EQ menus
-use the same target-action pattern as the status menu. The popup path compiles
-and clippy passes, but the display was asleep during the visual check, so it
-still needs one manual look. The Shortcuts settings tab explains that macOS has
-no global shortcut instead of offering a recorder.
+use the same target-action pattern as the status menu. Verified with synthetic
+input: the Equalizer "Profiles…" menu opens with Import/Export/Save items, and
+choosing "Import from file…" opens a real `NSOpenPanel`. The Shortcuts settings
+tab explains that macOS has no global shortcut instead of offering a recorder.
 
 ## 2026-11-09 — Launch at login
 
