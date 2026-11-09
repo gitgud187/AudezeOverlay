@@ -301,14 +301,14 @@ synthetic click inside the overlay, outside it, and back exercised
 staleness path was not forced interactively; it is covered by the key check and
 code review.
 
-Normal-quit socket unlinking uses the existing `Instance` drop path (covered by
-the instance tests) but was not exercised through the UI; the process was
-stopped externally after the smoke tests.
+Normal quit through the status menu exited the app and removed
+`~/Library/Application Support/AudezeOverlay/overlay.sock`, confirming the
+owner-drop path. `quit_later` itself remains unreachable from the accepted
+macOS arguments, so its wake event was not exercised separately.
 
-CI result: run `42708533527` passed the Windows build, Linux check, Flatpak and
-macOS check jobs, including the new HID and key tests and DMG
-packaging/upload. The first macOS attempt was cancelled before a runner was
-assigned; the rerun passed. The release job skipped as expected on a branch.
+CI result: run `42715466050` passed the Windows build, Linux check, Flatpak and
+macOS check jobs, including the blur-mask and key-window fixes and DMG
+packaging/upload. The release job skipped as expected on a branch.
 
 ## Open items
 
