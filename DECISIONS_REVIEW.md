@@ -191,6 +191,10 @@ bundled app created the expected socket and forwarded `--toggle` with exit 0.
 The display was locked, so this pass did not repeat the visual overlay check;
 the earlier rendering evidence and the unchanged presentation path still apply.
 
+CI result: run `42573811921` passed the Windows build, Linux check, Flatpak and
+macOS check jobs, including the new tests and DMG packaging/upload. The release
+job skipped as expected on a branch.
+
 ## Open items
 
 - Developer ID signing and notarization.
