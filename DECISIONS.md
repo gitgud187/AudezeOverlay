@@ -167,9 +167,10 @@ notes.
 **Why:** It mirrors the Linux workflow and keeps the macOS artifact in the same
 tested run as the other packages.
 
-**Consequences:** CI builds a thin arm64 bundle. A universal binary and
-notarization are release follow-ups. The release scripts were updated but have
-not run on GitHub yet.
+**Consequences:** CI builds a thin arm64 bundle. The full workflow passed on the
+fork for Windows, Linux, Flatpak and macOS. A universal binary and notarization
+are release follow-ups. The release publication job only runs on `main` or a
+version tag, so it did not run from the `macos-port` branch.
 
 ## 2026-11-09 — Evidence limits
 

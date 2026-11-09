@@ -150,6 +150,10 @@ Done:
   publish scripts include it in the release assets and notes.
 - Verified locally: the bundle launches with no Dock icon, renders, and forwards
   `--toggle` to the running instance.
+- CI is green on `macos-port`: the macOS job runs formatting, clippy, tests,
+  previews, packaging and artifact upload; Windows, Linux and Flatpak pass in the
+  same run. The CI-produced arm64 bundle verifies its checksum and ad-hoc
+  signature.
 
 Remaining:
 
