@@ -189,7 +189,9 @@ use synthetic sockets, not hardware.
 
 - Revisit the global shortcut with a deferred Carbon callback or an
   `NSEvent` monitor.
-- Decide whether to ship a universal binary and notarize it.
+- Decide whether to ship a universal binary and notarize it. The local Homebrew
+  Rust has no rustup, so the x86_64 target was not available here; CI or a
+  rustup toolchain can build both slices and `lipo` them.
 - Decide whether a second display and Stage Manager/Mission Control need
   additional coordinate handling.
 - Consider replacing deprecated file-type filters with `UTType`.
