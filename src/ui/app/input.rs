@@ -196,7 +196,6 @@ pub(in crate::ui) fn pointer_released(app: &mut App) {
 }
 
 /// The window lost pointer capture (for example to another window).
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(in crate::ui) fn pointer_capture_lost(app: &mut App) {
     if !matches!(app.drag, Drag::None) {
         save(app);
@@ -291,7 +290,6 @@ pub(in crate::ui) fn text_typed(app: &mut App, ch: char) -> bool {
     true
 }
 
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(in crate::ui) fn focus_lost(app: &mut App) {
     commit_eq_name(app);
     if !commit_number(app) {

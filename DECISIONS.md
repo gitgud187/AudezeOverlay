@@ -145,12 +145,16 @@ must not fail startup. Parsing once at startup lets the next candidate win.
 
 ## 2026-11-09 — Deferred hooks
 
-**Decision:** Allow four cross-platform app hooks to be unused on macOS:
-`displays_changed`, `pointer_capture_lost`, `focus_lost`, `hotkey_pressed`.
+**Decision:** Allow `displays_changed` and `hotkey_pressed` to be unused on
+macOS.
 
-**Why:** They are still used by Windows/Linux and are needed when screen-change,
-focus-loss and shortcut handling are wired on macOS. Suppressing them locally
-keeps the macOS build clean for CI without deleting shared behavior.
+**Why:** They are still used by Windows/Linux and are needed when screen-change
+and shortcut handling are revisited on macOS. Suppressing them locally keeps the
+macOS build clean for CI without deleting shared behavior.
+
+**Consequences:** `focus_lost` and `pointer_capture_lost` are no longer allowed
+to be dead: the window's `resignKeyWindow` override calls both, and a number
+edit followed by clicking another app was verified without a crash.
 
 ## 2026-11-09 — CI and release integration
 

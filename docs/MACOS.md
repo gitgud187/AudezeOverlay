@@ -98,8 +98,9 @@ Done:
 
 Remaining:
 
-- Keyboard and text entry, focus-loss handling, edge resize and cursor changes
-  are wired but not yet exercised end to end.
+- Edge resize and cursor changes are wired but not yet exercised end to end.
+  Keyboard and text entry (2500 → 3000 ms) and focus-loss commit were verified
+  with synthetic input.
 
 **Exit:** `--demo` shows and hides a correct overlay on a Retina display and on a
 second display, including window movement across screens.

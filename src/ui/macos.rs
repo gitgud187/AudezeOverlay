@@ -468,6 +468,14 @@ define_class!(
         fn can_become_main(&self) -> bool {
             true
         }
+
+        #[unsafe(method(resignKeyWindow))]
+        fn resign_key(&self) {
+            with_state(|state| {
+                focus_lost(&mut state.app);
+                pointer_capture_lost(&mut state.app);
+            });
+        }
     }
 );
 
