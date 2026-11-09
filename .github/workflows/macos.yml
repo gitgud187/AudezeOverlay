@@ -36,15 +36,15 @@ jobs:
         run: |
           cargo build --locked --release --bin audeze-overlay --bin preview-layouts
           target/release/preview-layouts
-      - name: Package the app bundle
+      - name: Package the app bundle and disk image
         run: packaging/macos/package-macos.sh
-      - name: Upload the macOS app
+      - name: Upload the macOS disk image
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: Audeze-Overlay-macOS-arm64
           path: |
-            dist/Audeze-Overlay-macOS-arm64.zip
-            dist/Audeze-Overlay-macOS-arm64.zip.sha256
+            dist/Audeze-Overlay-macOS-arm64.dmg
+            dist/Audeze-Overlay-macOS-arm64.dmg.sha256
           if-no-files-found: error
           retention-days: 14
       - name: Upload layout previews

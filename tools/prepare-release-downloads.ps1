@@ -26,7 +26,7 @@ $flatpak = Join-Path $ArtifactRoot 'flatpak'
 $macos = Join-Path $ArtifactRoot 'macos'
 $windowsNames = @('Audeze-Overlay-Setup.exe', 'Audeze-Overlay-Portable.zip')
 $linuxName = 'Audeze-Overlay-Linux-x86_64.tar.gz'
-$macosName = 'Audeze-Overlay-macOS-arm64.zip'
+$macosName = 'Audeze-Overlay-macOS-arm64.dmg'
 Assert-Checksums $windows 'SHA256SUMS.txt' $windowsNames
 Assert-Checksums $linux "$linuxName.sha256" @($linuxName)
 Assert-Checksums $macos "$macosName.sha256" @($macosName)

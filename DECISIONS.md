@@ -125,11 +125,12 @@ binary reports an error. A public build still needs Developer ID signing.
 ## 2026-11-09 — Packaging and minimum OS
 
 **Decision:** Assemble a thin host-architecture `.app` with `Info.plist`,
-`LSUIElement`, template icon and ad-hoc signature; set
-`LSMinimumSystemVersion` to 11.0.
+`LSUIElement`, template icon and ad-hoc signature, then wrap it in a
+drag-to-Applications `.dmg`; set `LSMinimumSystemVersion` to 11.0.
 
-**Why:** It matches the Linux archive workflow and keeps the app out of the Dock.
-SMAppService is guarded at runtime, so macOS 11/12 can still run everything else.
+**Why:** It gives macOS users the expected installer while keeping the app out
+of the Dock. SMAppService is guarded at runtime, so macOS 11/12 can still run
+everything else.
 
 **Consequences:** A universal binary, Developer ID signing and notarization are
 follow-ups. Launch at login needs macOS 13+.
@@ -161,7 +162,7 @@ edit followed by clicking another app was verified without a crash.
 **Decision:** Add a `macos-15` workflow that runs formatting, clippy, all-target
 tests, release builds, layout previews and the bundle script, then uploads the
 app. The release job waits for it, downloads
-`Audeze-Overlay-macOS-arm64.zip`, and includes it in the published assets and
+`Audeze-Overlay-macOS-arm64.dmg`, and includes it in the published assets and
 notes.
 
 **Why:** It mirrors the Linux workflow and keeps the macOS artifact in the same

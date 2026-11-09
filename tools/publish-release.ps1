@@ -47,7 +47,7 @@ if (!$mainBuild -and $RefName -ne "v$version") { throw 'Release tag must match C
 $tag = "v$version"
 $title = "Audeze Overlay $version"
 $prerelease = $tag.Contains('-')
-$assetNames = @('Audeze-Overlay-Setup.exe', 'Audeze-Overlay-Portable.zip', 'Audeze-Overlay-Linux-x86_64.tar.gz', 'Audeze-Overlay.flatpak', 'Audeze-Overlay-macOS-arm64.zip', 'SHA256SUMS.txt')
+$assetNames = @('Audeze-Overlay-Setup.exe', 'Audeze-Overlay-Portable.zip', 'Audeze-Overlay-Linux-x86_64.tar.gz', 'Audeze-Overlay.flatpak', 'Audeze-Overlay-macOS-arm64.dmg', 'SHA256SUMS.txt')
 $files = @($assetNames | ForEach-Object { (Get-Item -LiteralPath (Join-Path $ArtifactDirectory $_)).FullName })
 
 # Read all pages so rerunning an older tag cannot accidentally create a duplicate.
@@ -94,8 +94,8 @@ $notesPath = Join-Path $ArtifactDirectory 'release-notes.txt'
     "**[Read the Linux setup guide first](https://github.com/$Repository/blob/$tag/docs/LINUX.md#install).** Both options require a host udev rule for headset access.", '',
     'Requires Wayland with layer-shell (such as KDE Plasma or Sway). GNOME and X11 are not supported. Contributor hardware testing covers the original Maxwell Xbox dongle on KDE Plasma; other Linux configurations remain unverified. Expect bugs.', '',
     '## Download for macOS (Apple silicon, experimental)', '',
-    "[macOS app]($download/Audeze-Overlay-macOS-arm64.zip)", '',
-    'Requires macOS 11 or newer; launch at login requires macOS 13. The app is ad-hoc signed and not notarized, so Gatekeeper may ask you to open it from the context menu. The global shortcut is not available on macOS yet.', '',
+    "[macOS disk image]($download/Audeze-Overlay-macOS-arm64.dmg)", '',
+    'Drag the app to Applications. Requires macOS 11 or newer; launch at login requires macOS 13. The app is ad-hoc signed and not notarized, so Gatekeeper may ask you to open it from the context menu. The global shortcut is not available on macOS yet.', '',
     '<details>', '<summary>Package details</summary>', '',
     'All packages include licenses. Windows and Linux packages are unsigned; the macOS bundle is ad-hoc signed. SHA256SUMS.txt covers every download. Source code archives are for developers.', '',
     "Built from commit $CommitSha.", '',

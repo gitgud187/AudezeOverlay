@@ -4,10 +4,10 @@
 
 > **Status: working build, experimental.** The HID transport, window shell,
 > pointer input, status item, single instance, launch at login, native menus,
-> file panels/alerts and backdrop blur are implemented. The `.app` bundle and
-> macOS CI are in place. Remaining work is signing/notarization, a universal
-> binary, and more display/hardware evidence. The Linux port is the reference
-> for scope and validation; see [Linux](LINUX.md).
+> file panels/alerts and backdrop blur are implemented. The `.app` bundle, DMG
+> installer and macOS CI are in place. Remaining work is signing/notarization, a
+> universal binary, and more display/hardware evidence. The Linux port is the
+> reference for scope and validation; see [Linux](LINUX.md).
 
 ## Install and use
 
@@ -17,8 +17,12 @@ From a checkout:
 ```sh
 cargo build --release
 packaging/macos/package-macos.sh
-open "dist/Audeze Overlay.app"
+open dist/Audeze-Overlay-macOS-arm64.dmg
 ```
+
+Drag “Audeze Overlay” from the mounted disk image to Applications, then eject
+it. To run the checkout build without installing, open
+`dist/Audeze Overlay.app`.
 
 Gatekeeper may ask you to open it from the context menu, or allow it under
 System Settings → Privacy & Security. The app has no Dock icon; quit it from the
@@ -31,7 +35,7 @@ menu bar icon.
 - The global shortcut is not available on macOS yet; the menu bar icon and
   `--toggle` are the ways to show or hide the panel.
 
-Requirements: macOS 11 or newer on Apple silicon for this archive. The supported
+Requirements: macOS 11 or newer on Apple silicon for this build. The supported
 headset identities and their validation limits are the same as Windows and
 Linux; see [Device profiles](DEVICE_PROTOCOL.md).
 
@@ -143,24 +147,21 @@ game cannot be overlaid, as on any platform.
 Done:
 
 - `packaging/macos/`: `Info.plist` (`LSUIElement`), icon generated from the
-  existing vector, `.app` assembly, ad-hoc signature and a zipped archive with a
-  checksum.
+  existing vector, `.app` assembly, ad-hoc signature and a drag-to-Applications
+  disk image with a checksum.
 - `.github/workflows/macos.yml` builds, tests, lints, renders previews, packages
-  and uploads the app; the release workflow downloads the macOS artifact and the
-  publish scripts include it in the release assets and notes.
+  the disk image and uploads it; the release workflow downloads the macOS
+  artifact and the publish scripts include it in the release assets and notes.
 - Verified locally: the bundle launches with no Dock icon, renders, and forwards
   `--toggle` to the running instance.
-- CI is green on `macos-port`: the macOS job runs formatting, clippy, tests,
-  previews, packaging and artifact upload; Windows, Linux and Flatpak pass in the
-  same run. The CI-produced arm64 bundle verifies its checksum and ad-hoc
-  signature.
+- The macOS job runs in the same workflow as Windows, Linux and Flatpak; the
+  CI artifact is the same disk image whose checksum and signature are verified
+  during packaging.
 
 Remaining:
 
 - Developer ID signing and notarization for a public download.
 - Universal (arm64 + x86_64) binary; CI currently builds thin arm64.
-- Turn this page into the support guide, with hardware evidence and install
-  instructions, mirroring the structure of [LINUX.md](LINUX.md).
 
 **Exit:** a downloadable macOS build and a documented, reproducible check.
 
@@ -185,7 +186,7 @@ Remaining:
 
 | Path | Change |
 | --- | --- |
-| `src/ui/macos/` | New shell implementation |
+| `src/ui/macos.rs` | New shell implementation |
 | `src/device/hid/mac.rs` | New IOKit HID transport |
 | `src/device/hid.rs`, `src/ui/shell.rs`, `src/ui/app/eq_profiles.rs`, `src/main.rs`, `src/ui/mod.rs` | macOS `cfg` arms and the synchronous `FileSelection::Ready` path |
 | `src/config.rs`, `src/ui/draw.rs` | Preferences directory, system font and bundle asset lookup |

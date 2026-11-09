@@ -1,5 +1,6 @@
 #!/bin/sh
-# Builds the macOS app bundle from an already built binary:
+# Builds the macOS app bundle and a drag-to-Applications disk image from an
+# already built binary:
 #   packaging/macos/package-macos.sh [BINARY] [OUTPUT_DIR] [ARCH_LABEL]
 # Defaults: target/release/audeze-overlay, dist/, and the host architecture.
 # The bundle is ad-hoc signed; a public download still needs Developer ID
@@ -12,11 +13,11 @@ out=${2:-$root/dist}
 arch=${3:-$(uname -m)}
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -n 1)
 app="$out/Audeze Overlay.app"
-archive="Audeze-Overlay-macOS-$arch.zip"
+dmg="Audeze-Overlay-macOS-$arch.dmg"
 
 [ -x "$binary" ] || { echo "Build the binary first: $binary" >&2; exit 1; }
 
-rm -rf "$app" "$out/$archive" "$out/$archive.sha256"
+rm -rf "$app" "$out/$dmg" "$out/$dmg.sha256"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/docs"
 install -m755 "$binary" "$app/Contents/MacOS/audeze-overlay"
 cp -R "$root/assets" "$app/Contents/Resources/assets"
@@ -44,11 +45,17 @@ sed "s/@VERSION@/$version/g" "$root/packaging/macos/Info.plist" \
     > "$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist" >/dev/null
 
-if command -v codesign >/dev/null 2>&1; then
-    codesign --force --sign - "$app" >/dev/null 2>&1 || \
-        echo "warning: ad-hoc signing failed" >&2
+if ! codesign --force --sign - "$app" >/dev/null; then
+    echo "error: ad-hoc signing failed" >&2
+    exit 1
 fi
 
-ditto -c -k --sequesterRsrc --keepParent "$app" "$out/$archive"
-(cd "$out" && shasum -a 256 "$archive" > "$archive.sha256")
-echo "Wrote $out/$archive"
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
+cp -R "$app" "$stage/"
+ln -s /Applications "$stage/Applications"
+hdiutil create -volname "Audeze Overlay" -srcfolder "$stage" \
+    -ov -format UDZO "$out/$dmg" >/dev/null
+rm -rf "$stage"
+(cd "$out" && shasum -a 256 "$dmg" > "$dmg.sha256")
+echo "Wrote $out/$dmg"

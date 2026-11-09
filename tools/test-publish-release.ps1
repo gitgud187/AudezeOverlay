@@ -32,7 +32,7 @@ function Reset-Fixture {
         windows = @('Audeze-Overlay-Setup.exe', 'Audeze-Overlay-Portable.zip')
         linux = @('Audeze-Overlay-Linux-x86_64.tar.gz')
         flatpak = @('Audeze-Overlay.flatpak')
-        macos = @('Audeze-Overlay-macOS-arm64.zip')
+        macos = @('Audeze-Overlay-macOS-arm64.dmg')
     }
     foreach ($platform in $groups.Keys) {
         $directory = Join-Path $artifactRoot $platform
@@ -43,7 +43,7 @@ function Reset-Fixture {
         }
         if ($platform -eq 'windows') { $lines | Set-Content -LiteralPath (Join-Path $directory 'SHA256SUMS.txt') }
         if ($platform -eq 'linux') { $lines | Set-Content -LiteralPath (Join-Path $directory 'Audeze-Overlay-Linux-x86_64.tar.gz.sha256') }
-        if ($platform -eq 'macos') { $lines | Set-Content -LiteralPath (Join-Path $directory 'Audeze-Overlay-macOS-arm64.zip.sha256') }
+        if ($platform -eq 'macos') { $lines | Set-Content -LiteralPath (Join-Path $directory 'Audeze-Overlay-macOS-arm64.dmg.sha256') }
     }
     & "$PSScriptRoot/prepare-release-downloads.ps1" -ArtifactRoot $artifactRoot -OutputDirectory $testDirectory
 }
@@ -144,7 +144,7 @@ try {
     foreach ($name in @('Audeze-Overlay-Linux-x86_64.tar.gz', 'Audeze-Overlay.flatpak')) {
         Assert-That ($new.body.Contains("/download/$global:AudezeReleaseTesttag/$name")) 'Linux link points to a different release'
     }
-    Assert-That ($new.body.Contains("/download/$global:AudezeReleaseTesttag/Audeze-Overlay-macOS-arm64.zip")) 'macOS link points to a different release'
+    Assert-That ($new.body.Contains("/download/$global:AudezeReleaseTesttag/Audeze-Overlay-macOS-arm64.dmg")) 'macOS link points to a different release'
     Assert-That ($new.body.Contains('not notarized')) 'macOS signing caveat missing'
     Assert-That ($new.body.Contains('experimental') -and $new.body.Contains("/blob/$global:AudezeReleaseTesttag/docs/LINUX.md#install")) 'Linux caveats or versioned instructions missing'
     $checksums = @(Get-Content -LiteralPath (Join-Path $testDirectory 'SHA256SUMS.txt'))
