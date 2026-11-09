@@ -32,21 +32,47 @@ The transport has hardware evidence for reads, writes, restore and replug.
 **Consequences:** The small amount of IOKit FFI stays, but no new runtime
 dependency or privilege is introduced.
 
-### Translate macOS Delete to the shared Backspace character
+### Classify all device-removal IOKit codes
 
-**Decision:** In `key_down`, treat `U+007F`/`U+0008` as `text_typed(app, '\u{8}')`,
-the same character Windows `WM_CHAR` and Wayland `Keysym::BackSpace` deliver.
-Treat Command+A like Control+A for Select All, and do not insert text for
-unhandled Command shortcuts.
+**Decision:** Add `kIOReturnNoDevice` (`0xE00002C0`), `kIOReturnOffline`
+(`0xE00002D7`) and `kIOReturnNotAttached` (`0xE00002D9`) to `disconnected`.
 
-**Why:** AppKit reports the Delete key as `U+007F`, which `char::is_control()`
-filters out. The shared number and profile-name drafts only understand `U+0008`,
-so Backspace did nothing and a value could only be replaced by selecting all and
-typing over it. Command+A is the macOS convention.
+**Why:** The SDK header confirms these values, and `kIOReturnNoDevice` is the
+common result when a dongle is removed. It previously fell through to
+`USB sound command failed` instead of the worker's reconnect path.
 
-**Consequences:** Numeric and EQ-name editing now behaves like the other
-platforms, including deletion. This was not caught by the earlier typed-value
-check because it entered a value by replacing the selection.
+**Consequences:** Unplug is reported as a lost connection. A unit test covers
+the removal codes and keeps permission/exclusive errors out of that set.
+
+### Translate macOS Delete, select-all and function keys correctly
+
+**Decision:** In `key_input`, treat `U+007F`/`U+0008` as
+`text_typed(app, '\u{8}')`, decide Select All from
+`charactersIgnoringModifiers` (Control+A arrives as `U+0001` in `characters`),
+and drop the `U+F700..=U+F8FF` private-use range used for arrows, Home/End,
+forward-delete and function keys. Do not insert text for unhandled Command
+shortcuts.
+
+**Why:** AppKit reports Delete as `U+007F`, which `char::is_control()` filters
+out. Control+A only looks like `'a'` in the unmodified character, so the first
+test passed a combination AppKit never produces. Navigation and function keys
+are private-use characters, not control characters, so they reached EQ-name
+drafts as junk.
+
+**Consequences:** Numeric and EQ-name editing now matches the other platforms,
+including deletion; navigation keys are ignored; Command+A works. Tests cover
+DEL, `U+0001` Control+A, Command+A, function/arrow codes and a Command shortcut
+that must not insert text.
+
+### Mask the blur layer to the rounded corners
+
+**Decision:** Enable a layer on `NSVisualEffectView` and apply the same corner
+radius and `masksToBounds` used by the overlay layer.
+
+**Why:** The effect view is a full rectangle behind the overlay. With blur on,
+the effect could show square corners outside the rounded overlay. The display
+was locked during this pass, so this is verified by construction, not a new
+screenshot.
 
 ### Remove the transient allocation from asset lookup
 
@@ -69,14 +95,39 @@ thread does not report ready, set its stop flag before returning the error.
 that started but did not report ready also stayed detached with no stop signal.
 Both paths are rare, but they are the only extra device owners besides `Node`.
 
+### Frame unnumbered output reports
+
+**Decision:** Split the shared report buffer in `output_report`: numbered
+reports keep the ID byte in the payload; report ID 0 strips it and passes zero
+as the IOKit report ID. A one-byte unnumbered buffer is rejected.
+
+**Why:** IOKit's `IOHIDDeviceSetReport` takes the report ID separately and its
+header says a numbered report also carries the ID in the buffer. For report ID 0
+there is no ID byte, as hidapi handles it. The verified Maxwell protocol uses
+numbered reports, but the transport should not send an extra byte if an
+unnumbered control report appears.
+
+**Consequences:** A unit test covers numbered, unnumbered and empty framing.
+The input path still assumes numbered reports, so an unnumbered input report
+remains hardware-unverified.
+
 ### Reuse `Config::path()` for the macOS instance socket
 
 **Decision:** Derive the macOS socket directory from
 `Config::path().parent()` rather than repeating the
-`HOME/Library/Application Support/AudezeOverlay` join.
+`HOME/Library/Application Support/AudezeOverlay` join. Keep the `Instance`
+owner in `run`, clone its listener for the accept thread, and drop the owner
+after `app.run()` so a normal quit unlinks `overlay.sock`.
 
 **Why:** The settings file and the socket must live in the same per-user support
-directory. One source of truth avoids drift if the preferences location changes.
+directory. Moving the owner into the never-ending listener thread meant its
+`Drop` never ran, so the socket stayed behind after quit. The stale-socket path
+handled it, but cleanup belongs to the owner.
+
+**Consequences:** Normal quit removes the socket; a crash can still leave one.
+The comment now names Application Support and its 104-byte `sun_path` limit, so
+an extremely long home path fails startup rather than silently allowing two
+instances.
 
 ### Share launch-argument parsing
 
@@ -116,13 +167,23 @@ disagree.
 **Consequences:** A CI runner without a working `codesign` fails the macOS
 packaging step rather than publishing an unusable archive.
 
-### Correct the documentation and review trail
+### Correct the documentation, history and review trail
 
 **Decision:** Fix the macOS file table to name `src/ui/macos.rs`, document the
-DMG install, and add this review file to the documentation index.
+DMG install, add this review file to the documentation index, update `AGENTS.md`
+for macOS and six release assets, and restore the original zip-only packaging
+entries in `DECISIONS.md` with a dated review follow-up. Keep this review file
+tracked as a project design record.
 
-**Why:** The table named a non-existent `src/ui/macos/` directory. Installation
-instructions must match the shipped artifact.
+**Why:** The table named a non-existent `src/ui/macos/` directory. `AGENTS.md`
+still described a Windows/Linux product with five release assets. Editing the
+original packaging entry to mention the DMG made the two decision logs tell
+different histories.
+
+**Consequences:** `DECISIONS.md` remains the original port record and
+`DECISIONS_REVIEW.md` records the superseding review changes; the follow-up
+entry names the DMG. The `.gitignore` entries remain limited to scratch review
+notes.
 
 ### Clear the callback state pointer on every exit
 
@@ -135,21 +196,41 @@ but before `app.run()`. The early `?` returned while `STATE` still pointed into
 the dropped `State` box. The process did exit immediately, but leaving a dangling
 callback pointer depended on that accident.
 
-### Clear a pending edge resize when focus is lost
+### Defer focus-loss handling out of modal loops
 
-**Decision:** Reset the resize drag in `resignKeyWindow` before notifying the
-shared app that focus and pointer capture were lost.
+**Decision:** `resignKeyWindow` no longer calls `focus_lost` inline. It schedules
+a `focusLostLater:` selector with `performSelector:withObject:afterDelay:` in
+the default run-loop mode; that method clears the pending resize and notifies
+the shared app.
 
-**Why:** A mouse-up that never reaches the view would otherwise leave a stale
-frame and edge in `RESIZE`; a later drag could resize from the old frame.
+**Why:** `confirm`, `choose_file` and `popup_menu` run modal AppKit loops while
+the shared app is borrowed as `&mut App`. When a modal takes key status,
+`resignKeyWindow` fired and entered `with_state`, creating a second mutable
+borrow of `State` while the first was live. Deferring to the post-modal run-loop
+turn avoids the alias; timers already use the default mode, so they do not fire
+inside these modal loops.
+
+**Consequences:** Focus and pointer-capture loss are delivered one run-loop turn
+later on normal deactivation. The resize drag is cleared in the deferred method.
+
+### Wake AppKit after stopping the run loop
+
+**Decision:** After `NSApplication::stop`, post an application-defined
+`NSEvent` with `postEvent_atStart`.
+
+**Why:** `stop` takes effect after the current event. A timer or run-loop source
+is not an event, so AppKit's `nextEvent` can remain blocked until unrelated
+input arrives. This path is currently only used by `--render-only`, which the
+macOS argument parser does not accept, but the `Shell` implementation should
+still behave correctly.
 
 ### Add direct tests for the key translation
 
 **Decision:** Put the AppKit character mapping in a small pure `key_input`
-function and test DEL, Backspace, Command/Control+A and a Command shortcut that
-must not insert text.
+function and test DEL, real Control+A (`U+0001`), Command+A, arrow/function-key
+private-use characters, and a Command shortcut that must not insert text.
 
-**Why:** It exercises the actual regression without depending on synthetic
+**Why:** It exercises the actual regressions without depending on synthetic
 keyboard focus and a running window server.
 
 ## Deliberately unchanged
@@ -162,8 +243,18 @@ keyboard focus and a running window server.
   path and is necessary for the layer presentation. A reusable pixel provider
   would be a separate rendering optimization, not a review cleanup.
 - **No screen-parameter observer:** `displays_changed` remains allowed dead on
-  macOS. Multi-display and mixed-scale behavior are already documented limits;
-  adding an observer is new behavior that needs display hardware evidence.
+  macOS. Adding an observer is new behavior that needs display hardware evidence.
+- **Mixed-DPI coordinate spaces:** `window_rect`/`place` use the window's
+  backing scale while `screen_work` uses each screen's scale. On a Retina display
+  plus a 1× external display these are not one coordinate space. This is a
+  design gap, not just missing evidence; fixing it needs a canonical coordinate
+  model and hardware to verify. It remains an open item below.
+- **Cursor shape:** diagonal resize uses the crosshair because macOS has no
+  diagonal resize cursor, and the app does not install tracking rects; AppKit may
+  override the cursor on the window edge. Cosmetic, not a correctness issue.
+- **Timers in default run-loop mode:** animation pauses during native window
+  drags and menu tracking. That is acceptable and also keeps timers out of the
+  modal loops that triggered the focus-loss deferral.
 - **No global shortcut:** the Carbon callback re-entered the borrowed UI state
   and aborted. Revisiting it needs a deferred callback design; it is not part of
   this cleanup.
@@ -197,6 +288,7 @@ job skipped as expected on a branch.
 
 ## Open items
 
+- Mixed-DPI coordinate modeling across Retina and 1× displays.
 - Developer ID signing and notarization.
 - Universal (arm64 + x86_64) bundle.
 - Edge-resize and cursor end-to-end exercise.

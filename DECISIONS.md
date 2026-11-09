@@ -2,7 +2,9 @@
 
 Decisions made while porting Audeze Overlay to macOS (branch `macos-port`).
 Each entry records what was chosen, why, and what it constrains. Dates are the
-day the decision was made.
+day the decision was made. This file is the original port record; the later
+review branch keeps its findings in `DECISIONS_REVIEW.md`, with superseding
+changes noted in the dated follow-up at the end.
 
 ## 2026-11-09 — Direct IOKit HID transport
 
@@ -125,12 +127,11 @@ binary reports an error. A public build still needs Developer ID signing.
 ## 2026-11-09 — Packaging and minimum OS
 
 **Decision:** Assemble a thin host-architecture `.app` with `Info.plist`,
-`LSUIElement`, template icon and ad-hoc signature, then wrap it in a
-drag-to-Applications `.dmg`; set `LSMinimumSystemVersion` to 11.0.
+`LSUIElement`, template icon and ad-hoc signature; set
+`LSMinimumSystemVersion` to 11.0.
 
-**Why:** It gives macOS users the expected installer while keeping the app out
-of the Dock. SMAppService is guarded at runtime, so macOS 11/12 can still run
-everything else.
+**Why:** It matches the Linux archive workflow and keeps the app out of the Dock.
+SMAppService is guarded at runtime, so macOS 11/12 can still run everything else.
 
 **Consequences:** A universal binary, Developer ID signing and notarization are
 follow-ups. Launch at login needs macOS 13+.
@@ -162,7 +163,7 @@ edit followed by clicking another app was verified without a crash.
 **Decision:** Add a `macos-15` workflow that runs formatting, clippy, all-target
 tests, release builds, layout previews and the bundle script, then uploads the
 app. The release job waits for it, downloads
-`Audeze-Overlay-macOS-arm64.dmg`, and includes it in the published assets and
+`Audeze-Overlay-macOS-arm64.zip`, and includes it in the published assets and
 notes.
 
 **Why:** It mirrors the Linux workflow and keeps the macOS artifact in the same
@@ -186,6 +187,22 @@ other firmware was available.
 **Consequences:** The support page must say that multi-display coordinates,
 other identities and exclusive fullscreen remain unverified. The instance tests
 use synthetic sockets, not hardware.
+
+## 2026-11-09 — Review follow-up: DMG installer and hardening
+
+**Decision:** The `macos-port-review` branch supersedes the zip-only packaging
+with a drag-to-Applications `.dmg` and applies the fixes recorded in
+`DECISIONS_REVIEW.md`: missing IOKit removal codes, private-use key filtering,
+correct Control+A handling, a masked blur layer, deferred focus-loss dispatch,
+a wake event after `stop`, socket cleanup, and unnumbered output reports.
+
+**Why:** The DMG is the expected macOS installer, and the review found real
+edge cases in error classification, text input, modal re-entrancy and resource
+cleanup that the first implementation did not cover.
+
+**Consequences:** The release job now downloads
+`Audeze-Overlay-macOS-arm64.dmg`; assets remain six files. The entries above
+describe the original port and remain the historical record.
 
 ## Open decisions
 

@@ -138,9 +138,12 @@ global shortcut is explicitly out of scope for the first macOS release.
   compositor blur). Verified with an A/B capture at low background opacity:
   sharp terminal text with blur off, visibly diffused text with blur on.
 
-**Limits:** Mission Control, Stage Manager, mixed-scale multi-display Spaces and
-games that take exclusive display capture were not tested. An exclusive-capture
-game cannot be overlaid, as on any platform.
+**Limits:** Mission Control, Stage Manager and games that take exclusive display
+capture were not tested. Mixed-scale multi-display coordinates are not modeled
+consistently yet: window geometry follows the window's backing scale while
+monitor work areas follow each screen's scale. Treat a Retina plus 1× external
+display as unsupported until a canonical coordinate model is implemented and
+verified. An exclusive-capture game cannot be overlaid, as on any platform.
 
 ### 6. Packaging and release — in progress
 
