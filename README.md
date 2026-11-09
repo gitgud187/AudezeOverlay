@@ -21,6 +21,10 @@ additional hardware is not yet verified and non-ANC custom EQ editing is disable
 [Setup and compatibility](docs/LINUX.md#install).
 Requires a host udev rule and a desktop with layer-shell; GNOME and X11 are not supported.
 
+**macOS (experimental, Apple silicon):** [Build and install](docs/MACOS.md#install-and-use).
+No driver or udev rule is needed. The global shortcut is not available on macOS
+yet; use the menu bar icon or `--toggle`.
+
 ## One overlay, your layout
 
 Arrange it your way. Resize, rearrange, and hide cards, then adjust transparency
@@ -101,12 +105,14 @@ shortcut that opens the panel. [Full settings and controls guide](docs/USER_GUID
 
 **Hardware tested:** Maxwell 2 ANC PlayStation dongle (`3329:4BA9`) on Windows 11,
 plus wired status reads and mix recovery across cable changes (`3329:4BAA`).
-Other Maxwell identities and wired EQ editing remain experimental. Bluetooth is
-limited to Windows connection status, with no Bluetooth sound controls.
+Maxwell Xbox dongle (`3329:4B18`) on macOS 27 (arm64) for status, controls,
+restore and unplug/replug. Other Maxwell identities and wired EQ editing remain
+experimental. Bluetooth is limited to Windows connection status, with no
+Bluetooth sound controls.
 See the [validation matrix](docs/DEVICE_PROTOCOL.md) before trying another model.
 Use borderless/windowed games;
 exclusive fullscreen can prevent ordinary desktop overlays from appearing.
-Packages are currently unsigned.
+Windows and Linux packages are unsigned; the macOS bundle is ad-hoc signed.
 
 The overlay uses a separate desktop window, with no game injection, graphics
 hooks, game-memory access, or custom driver. **Anti-cheat vendor approval and
