@@ -51,12 +51,11 @@ fn glyph_coverage(bitmap: &[u8], width: usize, height: usize, x: f32, y: f32) ->
 }
 pub fn asset(name: &str) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    [
-        exe.join("assets").join(name),
-        PathBuf::from("assets/local").join(name),
-    ]
-    .into_iter()
-    .find(|p| p.exists())
+    let mut candidates = vec![exe.join("assets").join(name)];
+    #[cfg(target_os = "macos")]
+    candidates.push(exe.join("../Resources/assets").join(name));
+    candidates.push(PathBuf::from("assets/local").join(name));
+    candidates.into_iter().find(|path| path.exists())
 }
 #[derive(Clone, Copy)]
 enum FontWeight {

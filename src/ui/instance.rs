@@ -72,7 +72,13 @@ pub(in crate::ui) fn socket_path() -> Option<PathBuf> {
 
 #[cfg(target_os = "macos")]
 pub(in crate::ui) fn socket_path() -> Option<PathBuf> {
-    Some(std::env::temp_dir().join("audeze-overlay.sock"))
+    let home = PathBuf::from(std::env::var_os("HOME")?);
+    Some(
+        home.join("Library")
+            .join("Application Support")
+            .join("AudezeOverlay")
+            .join("overlay.sock"),
+    )
 }
 
 extern "C" {
@@ -97,6 +103,9 @@ fn try_lock(file: &File) -> std::io::Result<bool> {
 
 /// Delivers `request` to a running instance, or becomes the running instance.
 pub(in crate::ui) fn acquire(path: &Path, request: Request) -> std::io::Result<Role> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let lock = OpenOptions::new()
         .read(true)
         .write(true)

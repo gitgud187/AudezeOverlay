@@ -25,17 +25,19 @@ use objc2::{
     MainThreadOnly,
 };
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSCursor, NSEvent,
-    NSEventModifierFlags, NSImage, NSMenu, NSMenuItem, NSScreen, NSScreenSaverWindowLevel,
-    NSStatusBar, NSStatusItem, NSVariableStatusItemLength, NSView, NSWindow,
-    NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy,
+    NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSCursor, NSEvent,
+    NSEventModifierFlags, NSImage, NSMenu, NSMenuItem, NSModalResponseOK, NSOpenPanel, NSSavePanel,
+    NSScreen, NSScreenSaverWindowLevel, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
+    NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
+    NSVisualEffectView, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CFData, CFRetained};
 use objc2_core_graphics::{
     CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage, CGImageAlphaInfo,
 };
 use objc2_foundation::{
-    NSObject, NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect, NSSize, NSString,
+    NSArray, NSObject, NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect, NSSize, NSString,
 };
 use objc2_service_management::SMAppService;
 use std::{
@@ -339,6 +341,9 @@ define_class!(
                 .modifierFlags()
                 .contains(NSEventModifierFlags::Control);
             let Some(text) = event.characters() else {
+                with_state(|state| {
+                    key_pressed(&mut state.app, Key::Other);
+                });
                 return;
             };
             for character in text.to_string().chars() {
@@ -441,6 +446,7 @@ impl OverlayView {
             }
         }
         window.setFrame_display(frame, true);
+        with_state(|state| resized(&mut state.app));
     }
 }
 
@@ -537,6 +543,7 @@ struct Core {
     tray_icon: Option<Pixmap>,
     status_item: Option<Retained<NSStatusItem>>,
     tray_target: Option<Retained<TrayTarget>>,
+    effect: Retained<NSVisualEffectView>,
 }
 impl Core {
     fn new(mtm: MainThreadMarker, tray_icon: Option<Pixmap>) -> Result<Self> {
@@ -555,9 +562,27 @@ impl Core {
         window.setIgnoresMouseEvents(true);
         window.setAcceptsMouseMovedEvents(true);
 
-        let view = OverlayView::new(mtm, frame);
+        let content = NSRect::new(NSPoint::new(0., 0.), frame.size);
+        let effect = NSVisualEffectView::new(mtm);
+        effect.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
+        effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+        effect.setState(NSVisualEffectState::Active);
+        effect.setFrame(content);
+        effect.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        effect.setHidden(true);
+
+        let view = OverlayView::new(mtm, content);
         view.setWantsLayer(true);
-        window.setContentView(Some(&view));
+        view.setFrame(content);
+        view.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        effect.addSubview(&view);
+        window.setContentView(Some(&effect));
         let layer = view.layer();
 
         let mut context = CFRunLoopSourceContext {
@@ -592,6 +617,7 @@ impl Core {
             tray_icon,
             status_item: None,
             tray_target: None,
+            effect,
         })
     }
     fn present(&mut self) {
@@ -599,7 +625,7 @@ impl Core {
             return;
         };
         if let Some(frame) = &self.frame {
-            let contents: &AnyObject = (&**frame).as_ref();
+            let contents: &AnyObject = (**frame).as_ref();
             unsafe { layer.setContents(Some(contents)) };
             let scale = self.window.backingScaleFactor();
             layer.setContentsScale(scale);
@@ -935,7 +961,23 @@ impl Shell for MacShell {
         let window = self.core.borrow().window.clone();
         window.makeKeyAndOrderFront(None);
     }
-    fn set_blur(&mut self, _: u8) {}
+    fn set_blur(&mut self, strength: u8) {
+        let (window, view, effect) = {
+            let core = self.core.borrow();
+            (core.window.clone(), core.view.clone(), core.effect.clone())
+        };
+        if strength > 0 {
+            view.removeFromSuperview();
+            window.setContentView(Some(&effect));
+            effect.addSubview(&view);
+            view.setFrame(effect.bounds());
+            effect.setHidden(false);
+        } else {
+            view.removeFromSuperview();
+            window.setContentView(Some(&view));
+            effect.setHidden(true);
+        }
+    }
     fn clip_rounded(&mut self, diameter: i32) {
         self.core.borrow_mut().corners = diameter;
     }
@@ -997,11 +1039,62 @@ impl Shell for MacShell {
     fn popup_menu(&mut self, _: &[MenuEntry], _: MenuOrigin) -> Option<u32> {
         None
     }
-    fn confirm(&mut self, _: &str, _: &str, _: Buttons) -> Choice {
-        Choice::Cancel
+    fn confirm(&mut self, title: &str, message: &str, buttons: Buttons) -> Choice {
+        let alert = NSAlert::new(mtm());
+        alert.setMessageText(&NSString::from_str(title));
+        alert.setInformativeText(&NSString::from_str(message));
+        let (labels, choices): (&[&str], &[Choice]) = match buttons {
+            Buttons::YesNoCancel => (
+                &["Yes", "No", "Cancel"],
+                &[Choice::Yes, Choice::No, Choice::Cancel],
+            ),
+            Buttons::YesNo => (&["Yes", "No"], &[Choice::Yes, Choice::No]),
+            Buttons::OkCancel => (&["OK", "Cancel"], &[Choice::Ok, Choice::Cancel]),
+        };
+        for label in labels {
+            alert.addButtonWithTitle(&NSString::from_str(label));
+        }
+        let index = (alert.runModal() - NSAlertFirstButtonReturn)
+            .clamp(0, choices.len() as isize - 1) as usize;
+        choices[index]
     }
-    fn choose_file(&mut self, _: bool) -> std::result::Result<FileSelection, String> {
-        Err("File selection is not implemented on macOS yet.".into())
+    fn choose_file(&mut self, save: bool) -> std::result::Result<FileSelection, String> {
+        let mtm = mtm();
+        if save {
+            let panel = NSSavePanel::savePanel(mtm);
+            panel.setNameFieldStringValue(&NSString::from_str("My EQ.audeze-eq.json"));
+            let types = NSArray::from_retained_slice(&[NSString::from_str("json")]);
+            #[allow(deprecated)]
+            panel.setAllowedFileTypes(Some(&types));
+            if panel.runModal() != NSModalResponseOK {
+                return Ok(FileSelection::Ready(None));
+            }
+            Ok(FileSelection::Ready(
+                panel
+                    .URL()
+                    .and_then(|url| url.path())
+                    .map(|path| std::path::PathBuf::from(path.to_string())),
+            ))
+        } else {
+            let panel = NSOpenPanel::openPanel(mtm);
+            panel.setAllowsMultipleSelection(false);
+            let types = NSArray::from_retained_slice(&[
+                NSString::from_str("json"),
+                NSString::from_str("pnreq"),
+            ]);
+            #[allow(deprecated)]
+            panel.setAllowedFileTypes(Some(&types));
+            if panel.runModal() != NSModalResponseOK {
+                return Ok(FileSelection::Ready(None));
+            }
+            Ok(FileSelection::Ready(
+                panel
+                    .URLs()
+                    .firstObject()
+                    .and_then(|url| url.path())
+                    .map(|path| std::path::PathBuf::from(path.to_string())),
+            ))
+        }
     }
     fn register_hotkey(&mut self, _: u32, _: u32) -> bool {
         false

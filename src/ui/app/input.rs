@@ -114,6 +114,7 @@ pub(in crate::ui) fn move_or_resize_finished(app: &mut App) {
     save(app);
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(in crate::ui) fn displays_changed(app: &mut App) {
     app.monitors = app.shell.monitors();
     position(app);
@@ -195,6 +196,7 @@ pub(in crate::ui) fn pointer_released(app: &mut App) {
 }
 
 /// The window lost pointer capture (for example to another window).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(in crate::ui) fn pointer_capture_lost(app: &mut App) {
     if !matches!(app.drag, Drag::None) {
         save(app);
@@ -289,6 +291,7 @@ pub(in crate::ui) fn text_typed(app: &mut App, ch: char) -> bool {
     true
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(in crate::ui) fn focus_lost(app: &mut App) {
     commit_eq_name(app);
     if !commit_number(app) {
@@ -298,6 +301,7 @@ pub(in crate::ui) fn focus_lost(app: &mut App) {
 }
 
 /// The global shortcut fired. `ours` is false for a different registration.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(in crate::ui) fn hotkey_pressed(app: &mut App, ours: bool) {
     if app.recording {
         app.recorded_key = Some((app.config.hotkey_mod, app.config.hotkey_vk));
