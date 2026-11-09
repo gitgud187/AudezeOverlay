@@ -103,24 +103,7 @@ pub fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().collect();
-    if let Some(unknown) = args
-        .iter()
-        .skip(1)
-        .find(|a| !matches!(a.as_str(), "--demo" | "--toggle"))
-    {
-        return Err(format!(
-            "unknown option {unknown} (options: --demo, --toggle)"
-        ));
-    }
-    let demo = args.iter().any(|a| a == "--demo");
-    // Launching again asks the running instance to show itself; --toggle flips
-    // it. Demo runs are independent so they never disturb a real one.
-    let request = if args.iter().any(|a| a == "--toggle") {
-        instance::Request::Toggle
-    } else {
-        instance::Request::Open
-    };
+    let (demo, request) = super::parse_args()?;
     let socket = instance::socket_path().filter(|_| !demo);
     let instance = match &socket {
         Some(path) => match instance::acquire(path, request) {

@@ -5,6 +5,7 @@
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Write},
+    os::fd::AsRawFd,
     os::unix::fs::OpenOptionsExt,
     os::unix::net::{UnixListener, UnixStream},
     path::{Path, PathBuf},
@@ -72,13 +73,11 @@ pub(in crate::ui) fn socket_path() -> Option<PathBuf> {
 
 #[cfg(target_os = "macos")]
 pub(in crate::ui) fn socket_path() -> Option<PathBuf> {
-    let home = PathBuf::from(std::env::var_os("HOME")?);
-    Some(
-        home.join("Library")
-            .join("Application Support")
-            .join("AudezeOverlay")
-            .join("overlay.sock"),
-    )
+    let settings = audeze_overlay::config::Config::path();
+    if !settings.is_absolute() {
+        return None;
+    }
+    Some(settings.parent()?.join("overlay.sock"))
 }
 
 extern "C" {
@@ -88,7 +87,6 @@ const LOCK_EX: i32 = 2;
 const LOCK_NB: i32 = 4;
 
 fn try_lock(file: &File) -> std::io::Result<bool> {
-    use std::os::fd::AsRawFd;
     let result = unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) };
     if result == 0 {
         return Ok(true);
