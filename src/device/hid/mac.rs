@@ -166,11 +166,25 @@ extern "C" {
 
 /// IOKit objects may be used from one thread at a time; the listener moves the
 /// reference to its own thread and returns it there.
-struct SendDevice(IOHIDDeviceRef);
+struct SendDevice(Option<IOHIDDeviceRef>);
 unsafe impl Send for SendDevice {}
 impl SendDevice {
-    fn into_ptr(self) -> IOHIDDeviceRef {
+    fn new(device: IOHIDDeviceRef) -> Self {
+        Self(Some(device))
+    }
+    fn into_ptr(mut self) -> IOHIDDeviceRef {
         self.0
+            .take()
+            .expect("device reference was already consumed")
+    }
+}
+impl Drop for SendDevice {
+    fn drop(&mut self) {
+        // A failed thread spawn drops the closure, and this releases the extra
+        // retain instead of leaking it.
+        if let Some(device) = self.0.take() {
+            unsafe { CFRelease(device as CFTypeRef) };
+        }
     }
 }
 
@@ -439,7 +453,7 @@ impl Listener {
         let stopping = stop.clone();
         // The listener thread owns one reference until it exits.
         unsafe { CFRetain(device as CFTypeRef) };
-        let device = SendDevice(device);
+        let device = SendDevice::new(device);
         let thread = thread::Builder::new()
             .name("hid-listener".into())
             .spawn(move || unsafe {
@@ -479,9 +493,17 @@ impl Listener {
                 drop(context);
             })
             .map_err(|e| e.to_string())?;
-        started
-            .recv_timeout(Duration::from_secs(1))
-            .map_err(|_| "The macOS HID listener did not start.".to_string())??;
+        match started.recv_timeout(Duration::from_secs(1)) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                stop.store(true, Ordering::Release);
+                return Err(error);
+            }
+            Err(_) => {
+                stop.store(true, Ordering::Release);
+                return Err("The macOS HID listener did not start.".into());
+            }
+        }
         Ok(Box::new(Listener {
             reports: received,
             stop,
