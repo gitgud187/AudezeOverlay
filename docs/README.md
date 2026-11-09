@@ -11,6 +11,7 @@ Start with the [project overview and downloads](../README.md).
 | [Linux](LINUX.md) | Wayland overlay, install, Flatpak, hardware evidence, the udev rule and diagnostics |
 | [macOS build](MACOS.md) | Experimental arm64 build, install, limitations, roadmap and decisions |
 | [Implementation decisions](../DECISIONS.md) | Choices made during the macOS port, with reasons and open questions |
+| [Port review decisions](../DECISIONS_REVIEW.md) | Review findings, cleanups and deliberately unchanged trade-offs |
 | [Build, diagnostics and releases](DEVELOPMENT.md) | Local builds, diagnostic modes, packaging and GitHub releases |
 | [Architecture and Rust reading guide](ARCHITECTURE.md) | Module responsibilities, ownership and interaction flow |
 | [Contributing](../CONTRIBUTING.md) | Development checks and commit conventions |
