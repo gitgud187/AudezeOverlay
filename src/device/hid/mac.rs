@@ -51,6 +51,9 @@ const VENDOR_ID: i32 = 0x3329;
 const HOTPLUG_SETTLE_MS: u64 = 300;
 
 const IO_RETURN_SUCCESS: i32 = 0;
+const IO_RETURN_NO_DEVICE: i32 = 0xE000_02C0u32 as i32;
+const IO_RETURN_OFFLINE: i32 = 0xE000_02D7u32 as i32;
+const IO_RETURN_NOT_ATTACHED: i32 = 0xE000_02D9u32 as i32;
 const IO_RETURN_TIMEOUT: i32 = 0xE000_02D6u32 as i32;
 const IO_RETURN_NOT_READY: i32 = 0xE000_02D8u32 as i32;
 const IO_RETURN_NOT_OPEN: i32 = 0xE000_02CDu32 as i32;
@@ -65,7 +68,10 @@ const IO_RETURN_ABORTED: i32 = 0xE000_02EBu32 as i32;
 fn disconnected(result: IOReturn) -> bool {
     matches!(
         result,
-        IO_RETURN_TIMEOUT
+        IO_RETURN_NO_DEVICE
+            | IO_RETURN_OFFLINE
+            | IO_RETURN_NOT_ATTACHED
+            | IO_RETURN_TIMEOUT
             | IO_RETURN_NOT_READY
             | IO_RETURN_NOT_OPEN
             | IO_RETURN_NOT_RESPONDING
@@ -188,6 +194,23 @@ impl Drop for SendDevice {
     }
 }
 
+/// Splits the shared report buffer into the IOKit report ID and payload. A
+/// numbered report keeps its ID byte; report ID 0 is unnumbered, so the byte is
+/// not part of the payload IOKit receives.
+fn output_report(report: &[u8]) -> Result<(CFIndex, &[u8]), &'static str> {
+    let Some((&id, payload)) = report.split_first() else {
+        return Err("Empty USB sound command");
+    };
+    if id == 0 {
+        if payload.is_empty() {
+            return Err("Empty USB sound command");
+        }
+        Ok((0, payload))
+    } else {
+        Ok((CFIndex::from(id), report))
+    }
+}
+
 /// An open vendor-control interface; closing and releasing are paired in `Drop`.
 struct Node {
     device: IOHIDDeviceRef,
@@ -207,18 +230,17 @@ impl Drop for Node {
 }
 impl Hid for Node {
     fn write_report(&self, report: &[u8]) -> Result<()> {
-        if report.is_empty() {
-            return Err("Empty USB sound command".into());
-        }
-        // For numbered reports IOKit wants the report ID both as an argument and
-        // in the first byte, and the length covers the whole buffer.
+        // IOKit takes the report ID as an argument. For a numbered report it
+        // must also remain in the buffer; report ID 0 means the buffer contains
+        // only payload, as with hidapi.
+        let (report_id, bytes) = output_report(report).map_err(str::to_string)?;
         let result = unsafe {
             IOHIDDeviceSetReport(
                 self.device,
                 REPORT_OUTPUT,
-                report[0] as CFIndex,
-                report.as_ptr(),
-                report.len() as CFIndex,
+                report_id,
+                bytes.as_ptr(),
+                bytes.len() as CFIndex,
             )
         };
         match result {
@@ -549,4 +571,49 @@ extern "C" fn report_received(
     let bytes = unsafe { std::slice::from_raw_parts(report, report_length as usize) }.to_vec();
     let context = unsafe { &*(context as *const ListenerContext) };
     let _ = context.reports.send(bytes);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn removed_and_offline_devices_are_a_lost_connection() {
+        for result in [
+            IO_RETURN_NO_DEVICE,
+            IO_RETURN_OFFLINE,
+            IO_RETURN_NOT_ATTACHED,
+            IO_RETURN_TIMEOUT,
+            IO_RETURN_NOT_READY,
+            IO_RETURN_NOT_OPEN,
+            IO_RETURN_NOT_RESPONDING,
+            IO_RETURN_DEVICE_ERROR,
+            IO_RETURN_ABORTED,
+        ] {
+            assert!(disconnected(result), "{result:#x}");
+        }
+        assert!(!disconnected(IO_RETURN_SUCCESS));
+        assert!(!disconnected(IO_RETURN_NOT_PERMITTED));
+    }
+
+    #[test]
+    fn permission_and_exclusive_access_errors_are_not_disconnects() {
+        assert!(denied(IO_RETURN_NOT_PERMITTED));
+        assert!(denied(IO_RETURN_EXCLUSIVE_ACCESS));
+        assert!(!denied(IO_RETURN_NO_DEVICE));
+    }
+
+    #[test]
+    fn numbered_reports_keep_the_id_and_unnumbered_reports_strip_it() {
+        let (id, bytes) = output_report(&[6, 1, 2]).unwrap();
+        assert_eq!(id, 6);
+        assert_eq!(bytes, &[6, 1, 2]);
+
+        let (id, bytes) = output_report(&[0, 1, 2]).unwrap();
+        assert_eq!(id, 0);
+        assert_eq!(bytes, &[1, 2]);
+
+        assert!(output_report(&[]).is_err());
+        assert!(output_report(&[0]).is_err());
+    }
 }
