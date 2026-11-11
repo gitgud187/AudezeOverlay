@@ -477,15 +477,24 @@ pub(super) fn settings_page(
                 );
             } else {
                 // The desktop owns global shortcuts here; it shows and changes them.
-                for (top, line, size, color) in [
-                    (272., "Your desktop manages this shortcut.", 18., FG),
+                // macOS has none yet, so it points at the menu bar icon instead.
+                let (title, hint, alternative) = if cfg!(target_os = "macos") {
                     (
-                        306.,
+                        "Global shortcuts are not available on macOS yet.",
+                        "Use the menu bar icon to show or hide the overlay.",
+                        "Or run this command from a launcher or a key binding tool:",
+                    )
+                } else {
+                    (
+                        "Your desktop manages this shortcut.",
                         "Change it in System Settings > Shortcuts > Audeze Overlay.",
-                        15.,
-                        SUB,
-                    ),
-                    (336., "Or bind the command below to any key.", 15., SUB),
+                        "Or bind the command below to any key.",
+                    )
+                };
+                for (top, line, size, color) in [
+                    (272., title, 18., FG),
+                    (306., hint, 15., SUB),
+                    (336., alternative, 15., SUB),
                     (376., "audeze-overlay --toggle", 16., FG),
                 ] {
                     c.text(

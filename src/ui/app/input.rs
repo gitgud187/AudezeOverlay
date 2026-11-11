@@ -8,7 +8,7 @@ use super::*;
 pub(in crate::ui) enum Key {
     Enter,
     Escape,
-    /// Ctrl+A.
+    /// Ctrl+A (Command+A on macOS).
     SelectAll,
     Other,
 }
@@ -114,6 +114,7 @@ pub(in crate::ui) fn move_or_resize_finished(app: &mut App) {
     save(app);
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(in crate::ui) fn displays_changed(app: &mut App) {
     app.monitors = app.shell.monitors();
     position(app);
@@ -298,6 +299,7 @@ pub(in crate::ui) fn focus_lost(app: &mut App) {
 }
 
 /// The global shortcut fired. `ours` is false for a different registration.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(in crate::ui) fn hotkey_pressed(app: &mut App, ours: bool) {
     if app.recording {
         app.recorded_key = Some((app.config.hotkey_mod, app.config.hotkey_vk));

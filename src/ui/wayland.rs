@@ -5,7 +5,6 @@
 //! same input functions the Windows shell uses.
 mod autostart;
 mod blur;
-mod instance;
 mod modal;
 mod portal;
 mod scaling;
@@ -13,7 +12,7 @@ mod shell;
 mod shortcut;
 mod signals;
 mod tray;
-use super::{app::*, draw::Painter, shell::*};
+use super::{app::*, draw::Painter, instance, shell::*};
 use audeze_overlay::{config::Config, device, model::SoundState};
 use shell::{Core, Output, WlShell};
 use smithay_client_toolkit::{
@@ -104,24 +103,7 @@ pub fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().collect();
-    if let Some(unknown) = args
-        .iter()
-        .skip(1)
-        .find(|a| !matches!(a.as_str(), "--demo" | "--toggle"))
-    {
-        return Err(format!(
-            "unknown option {unknown} (options: --demo, --toggle)"
-        ));
-    }
-    let demo = args.iter().any(|a| a == "--demo");
-    // Launching again asks the running instance to show itself; --toggle flips
-    // it. Demo runs are independent so they never disturb a real one.
-    let request = if args.iter().any(|a| a == "--toggle") {
-        instance::Request::Toggle
-    } else {
-        instance::Request::Open
-    };
+    let (demo, request) = super::parse_args()?;
     let socket = instance::socket_path().filter(|_| !demo);
     let instance = match &socket {
         Some(path) => match instance::acquire(path, request) {

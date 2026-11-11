@@ -51,6 +51,14 @@ fn glyph_coverage(bitmap: &[u8], width: usize, height: usize, x: f32, y: f32) ->
 }
 pub fn asset(name: &str) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    // An app bundle keeps its assets in Contents/Resources.
+    #[cfg(target_os = "macos")]
+    {
+        let bundled = exe.join("../Resources/assets").join(name);
+        if bundled.exists() {
+            return Some(bundled);
+        }
+    }
     [
         exe.join("assets").join(name),
         PathBuf::from("assets/local").join(name),
@@ -72,9 +80,34 @@ fn system_font(weight: FontWeight) -> Option<PathBuf> {
     };
     Some(PathBuf::from(r"C:\Windows\Fonts").join(file))
 }
+/// The user's system sans-serif. macOS keeps San Francisco as a variable font;
+/// each candidate is parsed once here so an unusable file falls through to the
+/// next one instead of failing startup.
+#[cfg(target_os = "macos")]
+fn system_font(weight: FontWeight) -> Option<PathBuf> {
+    let fallbacks = match weight {
+        FontWeight::Regular => [
+            "/System/Library/Fonts/SFNS.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/System/Library/Fonts/Supplemental/Verdana.ttf",
+        ],
+        FontWeight::Semibold => [
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            "/System/Library/Fonts/Supplemental/Verdana Bold.ttf",
+            "/System/Library/Fonts/SFNS.ttf",
+        ],
+    };
+    fallbacks.iter().find_map(|path| {
+        let path = usable_font_file(path)?;
+        let bytes = std::fs::read(&path).ok()?;
+        Font::from_bytes(bytes, FontSettings::default())
+            .ok()
+            .map(|_| path)
+    })
+}
 /// The user's default sans-serif as named by fontconfig, then common font files.
 /// Run once at startup; no font is bundled with the application.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn system_font(weight: FontWeight) -> Option<PathBuf> {
     let (pattern, fallbacks) = match weight {
         FontWeight::Regular => (
@@ -113,8 +146,12 @@ fn usable_font_file(path: &str) -> Option<PathBuf> {
     (path.is_absolute() && matches!(extension.as_str(), "ttf" | "otf") && path.is_file())
         .then_some(path)
 }
+#[cfg(not(target_os = "macos"))]
 const NO_UI_FONT: &str = "No usable UI font was found. Install a sans-serif TrueType font \
 (for example DejaVu Sans or Noto Sans) and make sure fontconfig can find it.";
+#[cfg(target_os = "macos")]
+const NO_UI_FONT: &str = "No usable UI font was found. Install a sans-serif TrueType font \
+(for example Arial).";
 impl Painter {
     #[cfg(any(windows, test))]
     pub fn new() -> Self {

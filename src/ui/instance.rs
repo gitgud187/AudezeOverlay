@@ -56,7 +56,10 @@ impl Drop for Instance {
 }
 
 /// Where the socket lives: inside the sandbox's own runtime directory in a
-/// Flatpak, else directly in the user's runtime directory.
+/// Flatpak, else directly in the user's runtime directory. macOS uses the
+/// Application Support directory; its 104-byte `sun_path` limit means a very
+/// long home path fails startup rather than silently allowing two instances.
+#[cfg(target_os = "linux")]
 pub(super) fn socket_path() -> Option<PathBuf> {
     let runtime = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?);
     if !runtime.is_absolute() {
@@ -68,8 +71,52 @@ pub(super) fn socket_path() -> Option<PathBuf> {
     })
 }
 
+#[cfg(target_os = "macos")]
+pub(super) fn socket_path() -> Option<PathBuf> {
+    let settings = audeze_overlay::config::Config::path();
+    if !settings.is_absolute() {
+        return None;
+    }
+    Some(settings.parent()?.join("overlay.sock"))
+}
+
+#[cfg(target_os = "linux")]
+fn try_lock(file: &File) -> std::io::Result<bool> {
+    match rustix::fs::flock(file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+        Ok(()) => Ok(true),
+        Err(rustix::io::Errno::WOULDBLOCK) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// `rustix` is a Linux-only dependency, so macOS calls `flock` directly.
+#[cfg(target_os = "macos")]
+fn try_lock(file: &File) -> std::io::Result<bool> {
+    use std::os::fd::AsRawFd;
+    extern "C" {
+        fn flock(fd: std::os::fd::RawFd, operation: i32) -> i32;
+    }
+    const LOCK_EX: i32 = 2;
+    const LOCK_NB: i32 = 4;
+    // SAFETY: `flock` only reads the descriptor, which `file` keeps open.
+    if unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) } == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        Ok(false)
+    } else {
+        Err(error)
+    }
+}
+
 /// Delivers `request` to a running instance, or becomes the running instance.
 pub(super) fn acquire(path: &Path, request: Request) -> std::io::Result<Role> {
+    // Application Support may not exist before the first run.
+    #[cfg(target_os = "macos")]
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let lock = OpenOptions::new()
         .read(true)
         .write(true)
@@ -77,12 +124,7 @@ pub(super) fn acquire(path: &Path, request: Request) -> std::io::Result<Role> {
         .truncate(false)
         .mode(0o600)
         .open(path.with_extension("lock"))?;
-    let owns_lock =
-        match rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
-            Ok(()) => true,
-            Err(rustix::io::Errno::WOULDBLOCK) => false,
-            Err(error) => return Err(error.into()),
-        };
+    let owns_lock = try_lock(&lock)?;
     // The winner can hold the lock briefly before binding its socket. A bounded
     // retry forwards to it instead of removing a live socket or starting USB twice.
     for attempt in 0..20 {
@@ -117,6 +159,7 @@ pub(super) fn acquire(path: &Path, request: Request) -> std::io::Result<Role> {
 
 /// Reads the request a client sent, if it is a known one. Reads at most a few
 /// bytes and never waits long, so a stalled client cannot hold up the window.
+#[cfg(target_os = "linux")]
 pub(super) fn read_request(mut stream: UnixStream) -> Option<Request> {
     stream.set_nonblocking(false).ok()?;
     stream
@@ -125,6 +168,28 @@ pub(super) fn read_request(mut stream: UnixStream) -> Option<Request> {
     let mut buffer = [0u8; 16];
     let count = stream.read(&mut buffer).ok()?;
     Request::parse(std::str::from_utf8(&buffer[..count]).ok()?)
+}
+
+/// macOS rejects `SO_RCVTIMEO` on Unix sockets (`EINVAL`), so poll instead.
+#[cfg(target_os = "macos")]
+pub(super) fn read_request(mut stream: UnixStream) -> Option<Request> {
+    stream.set_nonblocking(true).ok()?;
+    let mut buffer = [0u8; 16];
+    let mut waited = 0;
+    loop {
+        match stream.read(&mut buffer) {
+            Ok(0) => return None,
+            Ok(count) => return Request::parse(std::str::from_utf8(&buffer[..count]).ok()?),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if waited >= 100 {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+                waited += 5;
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 #[cfg(test)]
