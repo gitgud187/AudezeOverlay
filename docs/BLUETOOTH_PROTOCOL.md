@@ -23,6 +23,9 @@ Wireless/BT mix is a USB-dongle feature, not this control channel.
 - **A** — frame or value taken from the decompiled Android app.
 - **M** — sent to / received from the headset on macOS and checked.
 - **I** — inferred from an app enum or mapping, not independently tested.
+- **O** — observed on macOS with a read-only probe (see
+  [Observed behavior](#observed-behavior)). Timings are from one unit, one Mac
+  and a handful of runs, not a benchmark.
 
 All read frames below are `A/M`: the frame came from the app and was replayed
 from macOS. Semantic mappings such as “value 2 means Xbox” are `I` even though
@@ -136,6 +139,32 @@ Verified write/read-back examples:
 | Sidetone level 20 | `05 5A 05 00 00 09 2C 00 14` | `... 2C 00 00 14` |
 | Noise Low | `05 5A 05 00 00 09 24 00 01` | `... 24 00 00 01` |
 | Voice prompt 4 | `05 5A 05 00 00 09 20 00 04` | `... 20 00 00 04` |
+
+## Observed behavior
+
+All `O`. Measured with a read-only probe on macOS that sent only the read
+frames above. Nothing was written to the headset.
+
+| Topic | Observation |
+| --- | --- |
+| Connect | About 400 ms to open the channel once the headset is connected; MTU 667. |
+| Reads | A single read is answered in about 40–60 ms. |
+| Concurrency | Twelve reads sent back-to-back with no spacing were all answered, in about 240 ms. |
+| Chunking | One receive can hold several frames (two were seen in a single chunk), so a parser must buffer the stream and split on `len`. |
+| Ordering | `5D` notifications (battery, firmware) can arrive after the `5B` responses of commands sent later. Match responses by command, not by arrival order. |
+| Unsolicited traffic | None during normal use. Mic mute switch, both wheels and their buttons, and a power-button tap produced nothing on this channel in a 90 s window. The tap only sent a media key over the audio link. State changes made on the headset therefore have to be polled. |
+| Power-off | Powering the headset off closed the channel; macOS reported `CHANNEL CLOSED` within seconds. |
+| Power-on | The channel reopened by itself about 15 s later, and a fresh connection worked without re-pairing. One unrequested frame arrived about a second after the reopen: `05 5C 05 00 82 2C 03 00 00`. Its meaning is unknown. |
+| Unknown headers | `05 5C` is a third header type beside `5B` and `5D`. A parser must skip unknown frames by `len` and must not treat them as errors. |
+
+Read-only values seen on this unit: battery 60 % then 59 % (`0x3C`, `0x3B`),
+firmware `v1.0.1.74`, mix 10, sidetone off with level 22 of 31, AI noise removal
+Low, mic mute `FF`, voice prompt 5, auto-shutdown 3600 s for both timers, headset
+type 2 and connection 2.
+
+Not yet observed: any write acknowledgement frame (the `5C` header may be one,
+but that is unconfirmed), behavior with two clients connected, and behavior when
+the headset goes out of range instead of being powered off.
 
 ## Triggering frames from this Mac
 
