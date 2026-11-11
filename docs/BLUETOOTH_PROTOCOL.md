@@ -92,7 +92,7 @@ RX 05 5D 05 00 D6 0C 00 00 3C      # 0x3C = 60%
 | Voice-prompt level | `05 5A 04 00 01 09 20 00` | `05 5B 06 00 01 09 20 00 00 <level>` | A/M |
 | Auto-shutdown | `05 5A 04 00 83 2C 01 00` | `05 5B 0D 00 83 2C 00 01 00 01 00 <sec1 LE> 01 00 <sec2 LE>` | A/M; layout I |
 | Headset type | `05 5A 04 00 01 09 2B 00` | `... 2B 00 00 <1|2>` | A/M raw; PS/Xbox mapping I |
-| Connection | `05 5A 04 00 01 09 26 00` | `... 26 00 00 02` | A/M raw; Bluetooth mapping I |
+| Connection | `05 5A 04 00 01 09 26 00` | `... 26 00 00 02` | A/M raw; `02` with Bluetooth alone and `03` with the dongle also connected O; meaning I |
 | Firmware version | `05 5A 03 00 07 1C 00` | ACK then `05 5D 0E 00 07 1C 00 00 09 <ASCII version>` | A/M |
 
 This unit’s firmware response is:
@@ -155,7 +155,10 @@ frames above. Nothing was written to the headset.
 | Unsolicited traffic | None during normal use. Mic mute switch, both wheels and their buttons, and a power-button tap produced nothing on this channel in a 90 s window. The tap only sent a media key over the audio link. State changes made on the headset therefore have to be polled. |
 | Power-off | Powering the headset off closed the channel; macOS reported `CHANNEL CLOSED` within seconds. |
 | Power-on | The channel reopened by itself about 15 s later, and a fresh connection worked without re-pairing. One unrequested frame arrived about a second after the reopen: `05 5C 05 00 82 2C 03 00 00`. Its meaning is unknown. |
-| Unknown headers | `05 5C` is a third header type beside `5B` and `5D`. A parser must skip unknown frames by `len` and must not treat them as errors. |
+| Unknown headers | `05 5C` is a third header type beside `5B` and `5D`. A parser must skip unknown frames by `len` and must not treat them as errors. The same header also appears in the USB dongle's report stream, where the existing parser already discards it. |
+| Dongle also connected | With the USB dongle plugged in and the headset connected to the Mac over Bluetooth at the same time, both channels answered every read and returned identical values. Bluetooth reads kept their 40–60 ms latency while the dongle was queried three times in parallel. The two links are not mutually exclusive. Only reads were tested: simultaneous writes over both were not. |
+| Connect time with dongle | The channel opened in about 700 ms with the dongle connected and about 300 ms without it (one run each, so treat the difference as unconfirmed). |
+| `connection` value | The connection read returned `03` while the dongle was also connected and `02` with Bluetooth alone, in two back-to-back runs on the same unit. The numbers are observed; reading `03` as "dongle also connected" is an inference. |
 
 Read-only values seen on this unit: battery 60 % then 59 % (`0x3C`, `0x3B`),
 firmware `v1.0.1.74`, mix 10, sidetone off with level 22 of 31, AI noise removal
@@ -163,8 +166,9 @@ Low, mic mute `FF`, voice prompt 5, auto-shutdown 3600 s for both timers, headse
 type 2 and connection 2.
 
 Not yet observed: any write acknowledgement frame (the `5C` header may be one,
-but that is unconfirmed), behavior with two clients connected, and behavior when
-the headset goes out of range instead of being powered off.
+but that is unconfirmed), behavior with two Bluetooth clients connected, writes
+sent over Bluetooth and the dongle at once, and behavior when the headset goes
+out of range instead of being powered off.
 
 ## Triggering frames from this Mac
 
