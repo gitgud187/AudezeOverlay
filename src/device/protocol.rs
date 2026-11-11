@@ -75,21 +75,41 @@ pub(super) fn consume_report_bytes_with_slot(
     stream: &mut Vec<u8>,
     bytes: &[u8],
     state: &mut SoundState,
-    mut observed: impl FnMut(&[u8], Option<Query>, &SoundState),
+    observed: impl FnMut(&[u8], Option<Query>, &SoundState),
     eq_slot: Option<u8>,
 ) -> QueryUpdates {
-    if bytes.len() < 3 || bytes[1] as usize > bytes.len() - 3 {
-        return QueryUpdates::default();
-    }
     let route = if state.transport == Some(crate::model::Connection::WiredUsb) {
         0
     } else {
         0x80
     };
-    if bytes[0] != 7 || bytes[1] > 61 || bytes[2] != route {
-        return QueryUpdates::default();
+    match report_body(bytes, route) {
+        Some(body) => consume_stream_bytes(stream, body, state, observed, eq_slot),
+        None => QueryUpdates::default(),
     }
-    stream.extend_from_slice(&bytes[3..3 + bytes[1] as usize]);
+}
+/// The frame bytes inside one HID input report (`07 len route body…`), or `None`
+/// when the report is not a well-formed reply for `route`.
+fn report_body(report: &[u8], route: u8) -> Option<&[u8]> {
+    if report.len() < 3 || report[1] as usize > report.len() - 3 {
+        return None;
+    }
+    if report[0] != 7 || report[1] > 61 || report[2] != route {
+        return None;
+    }
+    Some(&report[3..3 + report[1] as usize])
+}
+/// Appends `incoming` to the byte stream of response frames and consumes every
+/// complete frame. Independent of how the bytes arrived, so any carrier of this
+/// frame protocol can share it. A frame may span several chunks or share one.
+pub(super) fn consume_stream_bytes(
+    stream: &mut Vec<u8>,
+    incoming: &[u8],
+    state: &mut SoundState,
+    mut observed: impl FnMut(&[u8], Option<Query>, &SoundState),
+    eq_slot: Option<u8>,
+) -> QueryUpdates {
+    stream.extend_from_slice(incoming);
     let mut updated = QueryUpdates::default();
     while stream.len() >= 4 {
         if stream[0] != 5 || !matches!(stream[1], 0x5b | 0x5d) {
@@ -226,6 +246,51 @@ fn consume_report_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Synthetic frames built from the documented layout, not captured traffic.
+    fn mix_frame(value: u8) -> Vec<u8> {
+        vec![5, 0x5b, 6, 0, 0x83, 0x2c, 0, 0x0b, 0, value]
+    }
+    fn feed(stream: &mut Vec<u8>, state: &mut SoundState, bytes: &[u8]) -> Vec<Query> {
+        consume_stream_bytes(stream, bytes, state, |_, _, _| {}, None)
+            .into_iter()
+            .collect()
+    }
+    #[test]
+    fn stream_frames_may_share_a_chunk_or_span_several() {
+        let mut state = SoundState::default();
+        let mut stream = vec![];
+        let two: Vec<u8> = [mix_frame(10), mix_frame(12)].concat();
+        assert_eq!(
+            feed(&mut stream, &mut state, &two),
+            [Query::Mix, Query::Mix]
+        );
+        assert_eq!(state.mix, Some((40, 60)));
+        let split = mix_frame(4);
+        assert!(feed(&mut stream, &mut state, &split[..6]).is_empty());
+        assert_eq!(feed(&mut stream, &mut state, &split[6..]), [Query::Mix]);
+        assert_eq!(state.mix, Some((80, 20)));
+        assert!(stream.is_empty());
+    }
+    #[test]
+    fn stream_resynchronizes_after_garbage_and_oversized_lengths() {
+        let mut state = SoundState::default();
+        let mut stream = vec![];
+        let mut bytes = vec![0xaa, 5, 0x5d, 0xff, 0xff, 0];
+        bytes.extend(mix_frame(8));
+        assert_eq!(feed(&mut stream, &mut state, &bytes), [Query::Mix]);
+        assert_eq!(state.mix, Some((60, 40)));
+    }
+    #[test]
+    fn an_endless_unfinished_frame_cannot_grow_the_stream_without_bound() {
+        let mut state = SoundState::default();
+        let mut stream = vec![];
+        // A valid header promising 188 more bytes, then data that never completes it.
+        feed(&mut stream, &mut state, &[5, 0x5b, 0xbc, 0]);
+        for _ in 0..8 {
+            feed(&mut stream, &mut state, &[0; 60]);
+        }
+        assert!(stream.len() <= 256);
+    }
     #[test]
     fn wired_frames_reject_wireless_routing_and_use_the_reported_sidetone_range() {
         let mut state = SoundState {
