@@ -103,6 +103,20 @@ fn confirm_deadline(q: Query) -> Duration {
         _ => 900,
     })
 }
+/// Sidetone level readings need the sidetone range. When the range query times out
+/// the level is switched off, but the dongle can answer it moments later. Once the
+/// range is known, a switched-off level is polled again from now on; a level that
+/// is already scheduled keeps its time.
+fn resume_level_polling(
+    level_due: Option<Instant>,
+    range_known: bool,
+    now: Instant,
+) -> Option<Instant> {
+    match level_due {
+        None if range_known => Some(now),
+        other => other,
+    }
+}
 fn query_interval(q: Query) -> Duration {
     Duration::from_millis(match q {
         Query::Mix => 50,
@@ -592,6 +606,11 @@ pub fn start(
                             flight = None;
                         }
                     }
+                    due[Query::Level as usize] = resume_level_polling(
+                        due[Query::Level as usize],
+                        state.sidetone_max.is_some(),
+                        Instant::now(),
+                    );
                     if updated_fields != 0 {
                         state_may_have_changed = true;
                         last_good = Some(Instant::now());
@@ -801,6 +820,24 @@ mod tests {
             Some(Query::Battery as usize)
         );
         assert_eq!(next_query(&due, much_later, Some(Query::Battery)), Some(0));
+    }
+    #[test]
+    fn level_polling_resumes_when_the_sidetone_range_arrives_late() {
+        let now = Instant::now();
+        let scheduled = now + Duration::from_millis(700);
+        // Switched off by a range timeout, then the range arrives.
+        assert_eq!(resume_level_polling(None, true, now), Some(now));
+        // Still no range: stays off, so an unsupported level is never retried.
+        assert_eq!(resume_level_polling(None, false, now), None);
+        // Already scheduled: the existing time is kept, whether or not the range is known.
+        assert_eq!(
+            resume_level_polling(Some(scheduled), true, now),
+            Some(scheduled)
+        );
+        assert_eq!(
+            resume_level_polling(Some(scheduled), false, now),
+            Some(scheduled)
+        );
     }
     #[test]
     fn eq_write_requires_ack_then_readback_without_changing_mix_timing() {
