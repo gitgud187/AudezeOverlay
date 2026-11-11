@@ -44,8 +44,12 @@ required.
 | RFCOMM channel on this unit | 21 (resolve via SDP; do not hardcode it) |
 
 macOS exposes Classic Bluetooth through **IOBluetooth**, not CoreBluetooth.
-The helper/app needs `NSBluetoothAlwaysUsageDescription`; the first access
-triggers the Bluetooth permission prompt. A stable build prompts once.
+The process must be an app bundle with `NSBluetoothAlwaysUsageDescription`,
+launched through `open`; the first access triggers the Bluetooth permission
+prompt. A build re-signed with a different identity (ad-hoc signing changes it
+on every build) prompts again, a stable signing identity does not. IOBluetooth
+reports channel events on the main thread's run loop (see
+[Observed behavior](#observed-behavior)).
 
 ## Framing
 
@@ -147,7 +151,7 @@ frames above. Nothing was written to the headset.
 
 | Topic | Observation |
 | --- | --- |
-| Connect | About 400 ms to open the channel once the headset is connected; MTU 667. |
+| Connect | About 400 ms to open the channel once the headset is connected; MTU 667. Later runs took 100–300 ms. |
 | Reads | A single read is answered in about 40–60 ms. |
 | Concurrency | Twelve reads sent back-to-back with no spacing were all answered, in about 240 ms. |
 | Chunking | One receive can hold several frames (two were seen in a single chunk), so a parser must buffer the stream and split on `len`. |
@@ -159,6 +163,10 @@ frames above. Nothing was written to the headset.
 | Dongle also connected | With the USB dongle plugged in and the headset connected to the Mac over Bluetooth at the same time, both channels answered every read and returned identical values. Bluetooth reads kept their 40–60 ms latency while the dongle was queried three times in parallel. The two links are not mutually exclusive. Only reads were tested: simultaneous writes over both were not. |
 | Connect time with dongle | The channel opened in about 700 ms with the dongle connected and about 300 ms without it (one run each, so treat the difference as unconfirmed). |
 | `connection` value | The connection read returned `03` while the dongle was also connected and `02` with Bluetooth alone, in two back-to-back runs on the same unit. The numbers are observed; reading `03` as "dongle also connected" is an inference. |
+| Process type | A bare command-line binary was aborted (SIGABRT, exit 134) at its first IOBluetooth call, with or without an Info.plist embedded in the binary. The same program inside an app bundle launched with `open` worked. |
+| Callback thread | Open-complete, data and closed callbacks arrived on the main thread's run loop. With the channel opened from a secondary thread running its own run loop and the main thread idle, no callback arrived in 10 s; the same calls on the main thread worked. |
+| Repeated reads | The mix was read every 250, 100 and 50 ms for 5 s each. Every read was answered (20, 50 and 100 of them, none lost). Median latency was 43–48 ms, 95th percentile 67–88 ms, maximum 129 ms. This shows only that the channel keeps up. It is not a recommended rate: headset battery use and audio coexistence while polling were not measured. |
+| Stuck channel | After several aborted test runs the headset stopped accepting new control connections; the open failed after about 3 s, for every client including one that had worked the day before. Power-cycling the headset fixed it. The cause was not isolated. Close the channel when finished, and report an open failure clearly. |
 
 Read-only values seen on this unit: battery 60 % then 59 % (`0x3C`, `0x3B`),
 firmware `v1.0.1.74`, mix 10, sidetone off with level 22 of 31, AI noise removal
@@ -172,16 +180,18 @@ out of range instead of being powered off.
 
 ## Triggering frames from this Mac
 
-Use a small AppKit helper around **IOBluetooth**. It must be a bundled app with
-`NSBluetoothAlwaysUsageDescription`; a plain command-line process may be killed
-by TCC before it reaches the device.
+Use a small helper around **IOBluetooth**, packaged as an app bundle with
+`NSBluetoothAlwaysUsageDescription` and started with `open`. A bare command-line
+process is aborted at its first IOBluetooth call.
 
 1. Pair the Maxwell in System Settings.
 2. Enumerate `IOBluetoothDevice.pairedDevices()` and select the exact device
    name, not a substring match.
 3. Resolve the SPP UUID with `getServiceRecord(for:)`, then
-   `getRFCOMMChannelID:`.
-4. Open with `openRFCOMMChannelSync:withChannelID:delegate:`.
+   `getRFCOMMChannelID:`. Build the UUID from its 16 bytes as `Data`; a
+   differently built `IOBluetoothSDPUUID` did not find the record.
+4. Open with `openRFCOMMChannelAsync:withChannelID:delegate:` from the main
+   thread, which must be running its run loop.
 5. Send frame bytes with `writeSync:length:`.
 6. Collect `rfcommChannelData:data:length:`, split frames on
    `05 5B`/`05 5D`, and log the response.
@@ -195,6 +205,6 @@ Example frames to pass in:
 055a0500822c070001      # sidetone on
 ```
 
-If a reusable command-line sender is useful, add it as a Rust diagnostic under
-`src/bin/` rather than embedding a full Swift probe here. The doc is limited to
+A read-only Rust diagnostic, `probe-bluetooth`, is being added with the macOS
+Bluetooth work. It sends only the read frames above. This document is limited to
 the protocol and its evidence.
