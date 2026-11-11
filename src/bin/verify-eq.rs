@@ -10,17 +10,17 @@ fn read(d: &mut Device, s: &mut SoundState, q: Query) -> Result<(), String> {
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(2) {
         std::thread::sleep(Duration::from_millis(25));
-        let r = d.read_report()?;
-        if r[1] != 0 {
+        if d.receive()? {
             println!(
-                "report {}",
-                r.iter()
+                "bytes {}",
+                d.chunk()
+                    .iter()
                     .map(|b| format!("{b:02x}"))
                     .collect::<Vec<_>>()
                     .join(" ")
             );
         }
-        if d.consume_report(&r, s).contains(&q) {
+        if d.consume(s).contains(&q) {
             return Ok(());
         }
     }

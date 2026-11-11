@@ -15,6 +15,7 @@ pub mod command;
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
 mod descriptor;
 mod hid;
+mod link;
 pub mod profiles;
 pub mod protocol;
 mod selection;

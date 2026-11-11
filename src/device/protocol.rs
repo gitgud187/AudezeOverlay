@@ -71,34 +71,6 @@ pub const QUERIES: [Query; 7] = [
     Query::Mute,
     Query::Battery,
 ];
-pub(super) fn consume_report_bytes_with_slot(
-    stream: &mut Vec<u8>,
-    bytes: &[u8],
-    state: &mut SoundState,
-    observed: impl FnMut(&[u8], Option<Query>, &SoundState),
-    eq_slot: Option<u8>,
-) -> QueryUpdates {
-    let route = if state.transport == Some(crate::model::Connection::WiredUsb) {
-        0
-    } else {
-        0x80
-    };
-    match report_body(bytes, route) {
-        Some(body) => consume_stream_bytes(stream, body, state, observed, eq_slot),
-        None => QueryUpdates::default(),
-    }
-}
-/// The frame bytes inside one HID input report (`07 len route body…`), or `None`
-/// when the report is not a well-formed reply for `route`.
-fn report_body(report: &[u8], route: u8) -> Option<&[u8]> {
-    if report.len() < 3 || report[1] as usize > report.len() - 3 {
-        return None;
-    }
-    if report[0] != 7 || report[1] > 61 || report[2] != route {
-        return None;
-    }
-    Some(&report[3..3 + report[1] as usize])
-}
 /// Appends `incoming` to the byte stream of response frames and consumes every
 /// complete frame. Independent of how the bytes arrived, so any carrier of this
 /// frame protocol can share it. A frame may span several chunks or share one.
@@ -143,12 +115,12 @@ pub fn consume_stream_bytes(
     }
     updated
 }
-pub(super) fn continuation_allowed(report: &[u8], stream: &[u8], already_extra: usize) -> bool {
-    // Only finish a response that has actually started. An empty mailbox must
-    // never cause a tight read loop. The caller allows at most two extra reads.
+/// Whether to read again for the rest of a response frame. Only finish a frame
+/// that has actually started: an empty mailbox must never cause a tight read
+/// loop. The caller allows at most two extra reads.
+pub(super) fn continuation_allowed(delivered: bool, stream: &[u8], already_extra: usize) -> bool {
     already_extra < 2
-        && report.len() >= 3
-        && report[1] != 0
+        && delivered
         && stream.first() == Some(&5)
         && (stream.len() < 2 || matches!(stream[1], 0x5b | 0x5d))
         && (stream.len() < 4 || {
@@ -234,16 +206,6 @@ pub fn parse_frame(b: &[u8], s: &mut SoundState) -> Option<Query> {
 }
 
 #[cfg(test)]
-fn consume_report_bytes(
-    stream: &mut Vec<u8>,
-    bytes: &[u8],
-    state: &mut SoundState,
-    observed: impl FnMut(&[u8], Option<Query>, &SoundState),
-) -> QueryUpdates {
-    consume_report_bytes_with_slot(stream, bytes, state, observed, None)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     /// Synthetic frames built from the documented layout, not captured traffic.
@@ -292,18 +254,16 @@ mod tests {
         assert!(stream.len() <= 256);
     }
     #[test]
-    fn wired_frames_reject_wireless_routing_and_use_the_reported_sidetone_range() {
-        let mut state = SoundState {
-            transport: Some(crate::model::Connection::WiredUsb),
-            ..Default::default()
-        };
+    fn the_sidetone_level_scale_comes_from_the_reported_maximum() {
+        let mut state = SoundState::default();
         let mut stream = vec![];
-        let mut report = vec![7, 10, 0x80, 5, 0x5b, 6, 0, 1, 9, 0x2d, 0, 0, 40];
-        assert!(consume_report_bytes(&mut stream, &report, &mut state, |_, _, _| {}).is_empty());
-        report[2] = 0;
-        assert!(
-            consume_report_bytes(&mut stream, &report, &mut state, |_, _, _| {})
-                .contains(&Query::MaxSidetone)
+        assert_eq!(
+            feed(
+                &mut stream,
+                &mut state,
+                &[5, 0x5b, 6, 0, 1, 9, 0x2d, 0, 0, 40]
+            ),
+            [Query::MaxSidetone]
         );
         assert_eq!(
             parse_frame(&[5, 0x5b, 6, 0, 1, 9, 0x2c, 0, 0, 20], &mut state),
@@ -357,15 +317,7 @@ mod tests {
             let mut stream = vec![];
             let mut state = SoundState::default();
             for payload in wire.chunks(chunk_size) {
-                let mut report = vec![7, payload.len() as u8, 0x80];
-                report.extend_from_slice(payload);
-                consume_report_bytes_with_slot(
-                    &mut stream,
-                    &report,
-                    &mut state,
-                    |_, _, _| {},
-                    Some(8),
-                );
+                consume_stream_bytes(&mut stream, payload, &mut state, |_, _, _| {}, Some(8));
             }
             assert_eq!(state.eq_bands, Some(expected));
             assert!(stream.is_empty());
@@ -373,9 +325,7 @@ mod tests {
         let mut unsolicited = SoundState::default();
         let mut stream = vec![];
         for payload in wire.chunks(59) {
-            let mut report = vec![7, payload.len() as u8, 0x80];
-            report.extend_from_slice(payload);
-            consume_report_bytes(&mut stream, &report, &mut unsolicited, |_, _, _| {});
+            consume_stream_bytes(&mut stream, payload, &mut unsolicited, |_, _, _| {}, None);
         }
         assert_eq!(unsolicited.eq_bands, None);
         wire[21] = 0; // Duplicate band ID.
@@ -392,17 +342,16 @@ mod tests {
             let mut observed = vec![];
             let mut updates = vec![];
             for piece in [&frames[..split], &frames[split..]] {
-                let mut report = vec![7, piece.len() as u8, 0x80];
-                report.extend_from_slice(piece);
-                updates.extend(consume_report_bytes(
+                updates.extend(consume_stream_bytes(
                     &mut stream,
-                    &report,
+                    piece,
                     &mut state,
                     |_, q, s| {
                         if q == Some(Query::Mix) {
                             observed.push(s.mix.unwrap().1);
                         }
                     },
+                    None,
                 ));
             }
             assert_eq!(observed, vec![45, 50], "split at {split}");
@@ -422,17 +371,16 @@ mod tests {
         let mut values = vec![];
         let mut updates = vec![];
         for payload in wire.chunks(61) {
-            let mut report = vec![7, payload.len() as u8, 0x80];
-            report.extend_from_slice(payload);
-            updates.extend(consume_report_bytes(
+            updates.extend(consume_stream_bytes(
                 &mut stream,
-                &report,
+                payload,
                 &mut state,
                 |_, field, state| {
                     if field == Some(Query::Mix) {
                         values.push(state.mix.unwrap().1);
                     }
                 },
+                None,
             ));
         }
         assert_eq!(updates, vec![Query::Mix; 21]);
@@ -443,15 +391,14 @@ mod tests {
     #[test]
     fn continuation_reads_require_partial_data_and_have_a_fixed_budget() {
         let partial = [5, 0x5b, 6];
-        let nonempty = [7, 3, 0x80, 5, 0x5b, 6];
-        assert!(continuation_allowed(&nonempty, &partial, 0));
-        assert!(continuation_allowed(&nonempty, &partial, 1));
-        assert!(!continuation_allowed(&nonempty, &partial, 2));
-        assert!(!continuation_allowed(&[7, 0, 0x80], &partial, 0));
-        assert!(!continuation_allowed(&nonempty, &[], 0));
-        assert!(!continuation_allowed(&nonempty, &[0, 0, 0], 0));
+        assert!(continuation_allowed(true, &partial, 0));
+        assert!(continuation_allowed(true, &partial, 1));
+        assert!(!continuation_allowed(true, &partial, 2));
+        assert!(!continuation_allowed(false, &partial, 0));
+        assert!(!continuation_allowed(true, &[], 0));
+        assert!(!continuation_allowed(true, &[0, 0, 0], 0));
         assert!(!continuation_allowed(
-            &nonempty,
+            true,
             &[5, 0x5b, 6, 0, 0x83, 0x2c, 0, 11, 0, 9],
             0
         ));

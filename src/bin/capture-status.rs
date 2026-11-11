@@ -17,14 +17,13 @@ fn main() -> Result<(), String> {
         let start = Instant::now();
         while start.elapsed() < Duration::from_millis(160) {
             sleep(Duration::from_millis(10));
-            let report = device.read_report()?;
-            if report[1] > 0 {
+            if device.receive()? {
                 println!(
                     "{query:?} {}ms {:02x?}",
                     start.elapsed().as_millis(),
-                    report
+                    device.chunk()
                 );
-                device.consume_report(&report, &mut state);
+                device.consume(&mut state);
             }
         }
     }
