@@ -9,6 +9,7 @@ Start with the [project overview and downloads](../README.md).
 | [Device integration and compatibility](DEVICE_AND_COMPATIBILITY.md) | USB scheduling, latency limits, rendering, anti-cheat boundaries and visual assets |
 | [Device profiles and validation](DEVICE_PROTOCOL.md) | Experimental model identities, protocol evidence, wired connections and remaining hardware checks |
 | [Linux](LINUX.md) | Wayland overlay, install, Flatpak, hardware evidence, the udev rule and diagnostics |
+| [macOS build](MACOS.md) | Experimental Apple silicon build, install, hardware evidence and limits |
 | [Build, diagnostics and releases](DEVELOPMENT.md) | Local builds, diagnostic modes, packaging and GitHub releases |
 | [Architecture and Rust reading guide](ARCHITECTURE.md) | Module responsibilities, ownership and interaction flow |
 | [Contributing](../CONTRIBUTING.md) | Development checks and commit conventions |

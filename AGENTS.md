@@ -7,8 +7,8 @@ actual source and working tree; documentation and old handoffs can be stale.
 
 ## Product and scope
 
-Audeze Overlay is a small Rust application for Windows 11 (Win32) and, experimentally,
-Linux (Wayland). It reads and
+Audeze Overlay is a small Rust application for Windows 11 (Win32) and,
+experimentally, Linux (Wayland) and macOS (AppKit). It reads and
 controls supported headset settings directly through a USB dongle, displays a
 native overlay, and works without Audeze App running. Keep the UI responsive and
 the idle footprint small.
@@ -85,8 +85,11 @@ interface, trait, or service wrapper for every struct.
 | `src/ui/app.rs`, `src/ui/app/`, `src/ui/shell.rs` | Portable application coordination and the `Shell` interface |
 | `src/ui/win32.rs`, `src/ui/win32/` | Windows window lifetime, events and presentation |
 | `src/ui/wayland.rs`, `src/ui/wayland/` | Linux window, input, portals and tray |
+| `src/ui/macos.rs` | macOS AppKit window, input, presentation and menus |
+| `src/device/hid/mac.rs` | macOS IOKit HID transport |
 | `src/platform/` | Windows-specific services such as startup and composition |
 | `src/bin/` | Explicit diagnostic/development executables |
+| `packaging/macos/` | macOS `.app` assembly and DMG packaging |
 
 Views must not write headset settings, persist preferences, or perform blocking
 I/O. Native event handlers translate actions; the USB worker owns device work.
@@ -142,6 +145,18 @@ cargo test --locked --all-targets --all-features
 & .\build.ps1
 ```
 
+On macOS, run the same Rust checks and package the app:
+
+```sh
+cargo fmt --all --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --all-targets
+packaging/macos/package-macos.sh
+```
+
+Mount the resulting DMG and verify its checksum, `codesign --verify --deep
+--strict`, the `Applications` symlink and a launch.
+
 Check every command's exit status and fix failures. PowerShell does not
 automatically stop on every native-command failure. Do not suppress warnings or
 weaken assertions to obtain a green result.
@@ -161,6 +176,8 @@ establish hardware support, physical latency, or anti-cheat compatibility.
 For packaging, use `tools/package.ps1`; do not hand-assemble release downloads.
 With the local LLVM binary, pass `-BinaryPath target\release\audeze-overlay.exe`
 and `-Target x86_64-pc-windows-gnullvm`. Inspect archive contents and checksums.
+For macOS, use `packaging/macos/package-macos.sh`; it creates the `.app` and a
+drag-to-Applications DMG and fails if ad-hoc signing fails.
 
 ## Git, commits and publishing
 
@@ -193,11 +210,13 @@ and `-Target x86_64-pc-windows-gnullvm`. Inspect archive contents and checksums.
   an intended versioned release; main publication creates the matching tag itself.
 - Publication is complete only after build and release jobs succeed and
   `https://api.github.com/repos/temdah/AudezeOverlay/releases/latest` has the
-  expected commit in its notes and the five intended assets:
+  expected commit in its notes and the six intended assets:
   `Audeze-Overlay-Setup.exe`, `Audeze-Overlay-Portable.zip`,
-  `Audeze-Overlay-Linux-x86_64.tar.gz`, `Audeze-Overlay.flatpak`, `SHA256SUMS.txt`.
-  All build jobs must succeed for the same commit. Label Linux experimental and
-  link its setup/compatibility guide separately from the Windows downloads.
+  `Audeze-Overlay-Linux-x86_64.tar.gz`, `Audeze-Overlay.flatpak`,
+  `Audeze-Overlay-macOS-arm64.dmg`, `SHA256SUMS.txt`.
+  All build jobs must succeed for the same commit. Label Linux and macOS
+  experimental and link their setup/compatibility guides separately from the
+  Windows downloads.
   Verify downloads and What's new. A tag alone is not a published release.
 - Preserve the clear recommended-installer and portable-option release format.
   Keep licenses inside packages. Do not upload the whole local output directory,
