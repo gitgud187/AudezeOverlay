@@ -183,6 +183,7 @@ version = "1.0.6"
 dependencies = [
  "ashpd",
  "async-io",
+ "block2",
  "core-foundation",
  "core-foundation-sys",
  "embed-resource",
@@ -195,6 +196,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation",
+ "objc2-io-bluetooth",
  "objc2-quartz-core",
  "objc2-service-management",
  "rustix",
@@ -795,6 +797,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
 dependencies = [
  "bitflags",
+ "block2",
  "dispatch2",
  "objc2",
 ]
@@ -827,6 +830,17 @@ dependencies = [
  "bitflags",
  "objc2",
  "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-io-bluetooth"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "558b52e7b77f6a68e1e2cc700ff2266779ede47bacb260a33d363b9a623cc761"
+dependencies = [
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-foundation",
 ]
 
 [[package]]

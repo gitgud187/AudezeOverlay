@@ -102,7 +102,7 @@ fn report_body(report: &[u8], route: u8) -> Option<&[u8]> {
 /// Appends `incoming` to the byte stream of response frames and consumes every
 /// complete frame. Independent of how the bytes arrived, so any carrier of this
 /// frame protocol can share it. A frame may span several chunks or share one.
-pub(super) fn consume_stream_bytes(
+pub fn consume_stream_bytes(
     stream: &mut Vec<u8>,
     incoming: &[u8],
     state: &mut SoundState,

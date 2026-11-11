@@ -87,7 +87,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "objc2-core-graphics",
     "objc2-quartz-core",
 ] }
-objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["CFData"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["CFData", "CFDate", "CFRunLoop", "CFString", "block2"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = [
     "CGBitmapContext",
     "CGColorSpace",
@@ -98,12 +98,30 @@ objc2-core-graphics = { version = "0.3.2", default-features = false, features = 
     "objc2",
 ] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "NSArray",
+    "NSData",
     "NSError",
     "NSEnumerator",
     "NSGeometry",
     "NSObject",
     "NSProcessInfo",
     "NSString",
+] }
+# Classic Bluetooth (RFCOMM) control channel of the headset. IOBluetooth is
+# macOS-only, so no other target downloads or compiles these.
+block2 = "0.6"
+objc2-io-bluetooth = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "objc2",
+    "objc2-core-foundation",
+    "objc2-foundation",
+    "Bluetooth",
+    "IOBluetoothDevice",
+    "IOBluetoothObject",
+    "IOBluetoothRFCOMMChannel",
+    "IOBluetoothSDPServiceRecord",
+    "IOBluetoothSDPUUID",
+    "IOBluetoothTypes",
 ] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
     "CALayer",

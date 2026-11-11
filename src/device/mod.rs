@@ -8,6 +8,8 @@ mod bluetooth_status {
         None
     }
 }
+#[cfg(target_os = "macos")]
+pub mod bluetooth;
 mod cable_mix;
 pub mod command;
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
@@ -19,7 +21,7 @@ mod selection;
 mod usb;
 mod worker;
 pub use hid::InputStream;
-pub use protocol::{parse_frame, Query, QueryUpdates, QUERIES};
+pub use protocol::{consume_stream_bytes, parse_frame, Query, QueryUpdates, QUERIES};
 pub use usb::Device;
 pub use worker::{command_matches, delivery_time, start, trace_present, Delivery};
 
