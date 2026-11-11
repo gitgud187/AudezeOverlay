@@ -36,9 +36,9 @@ fn main() -> Result<(), String> {
             println!("{}ms {:02x?}", start.elapsed().as_millis(), bytes);
             if args.iter().any(|s| s == "--read-notification") {
                 for _ in 0..4 {
-                    let report = device.read_report()?;
-                    println!("NOTIFICATION PAYLOAD {:02x?}", report);
-                    if report[1] == 0 {
+                    let delivered = device.receive()?;
+                    println!("NOTIFICATION PAYLOAD {:02x?}", device.chunk());
+                    if !delivered {
                         break;
                     }
                 }

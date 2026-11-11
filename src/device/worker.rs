@@ -437,16 +437,16 @@ pub fn start(
                                 #[cfg(feature = "perf-stats")]
                                 super::perf::READS
                                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                let report = device.read_report()?;
+                                let delivered = device.receive()?;
                                 #[cfg(feature = "perf-stats")]
-                                if report[1] == 0 {
+                                if !delivered {
                                     super::perf::EMPTY
                                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 }
                                 received = Instant::now();
                                 let raw = if trace.enabled() {
-                                    let len = (report[1] as usize + 3).min(report.len());
-                                    report[..len]
+                                    device
+                                        .chunk()
                                         .iter()
                                         .map(|b| format!("{b:02x}"))
                                         .collect::<Vec<_>>()
@@ -467,10 +467,8 @@ pub fn start(
                                         ..Default::default()
                                     },
                                 );
-                                for field in device.consume_report_observed(
-                                    &report,
-                                    &mut state,
-                                    |bytes, field, value| {
+                                for field in
+                                    device.consume_observed(&mut state, |bytes, field, value| {
                                         if trace.enabled() {
                                             let raw = bytes
                                                 .iter()
@@ -498,12 +496,12 @@ pub fn start(
                                                 },
                                             );
                                         }
-                                    },
-                                ) {
+                                    })
+                                {
                                     updated_fields |= 1 << field as u8;
                                 }
                                 if updated_fields & (1 << q as u8) != 0
-                                    || !device.needs_continuation(&report, extra_reads)
+                                    || !device.needs_continuation(delivered, extra_reads)
                                 {
                                     break;
                                 }

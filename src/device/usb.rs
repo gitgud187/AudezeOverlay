@@ -1,11 +1,11 @@
-//! The headset's sound commands over one vendor-defined HID interface.
-//! Wire framing and parsing are in `protocol`; the platform's HID access is in `hid`.
+//! The headset's sound commands over one connection.
+//! Wire framing and parsing are in `protocol`; what carries the frames is a
+//! `Link`, which for the dongle and USB cable is the platform's HID access in `hid`.
 use super::command::Command;
-use super::hid::{Hid, InputStream, Interface};
+use super::hid::{InputStream, Interface};
+use super::link::{HidLink, Link};
 use super::profiles::Profile;
-use super::protocol::{
-    consume_report_bytes_with_slot, continuation_allowed, Query, QueryUpdates, ANC_MODES,
-};
+use super::protocol::{consume_stream_bytes, continuation_allowed, Query, QueryUpdates, ANC_MODES};
 use super::{hid, selection};
 use crate::model::SoundState;
 type Result<T> = std::result::Result<T, String>;
@@ -17,15 +17,18 @@ pub struct Device {
     sidetone_max: Option<u8>,
     /// Platform-specific identity of the opened interface.
     id: String,
-    output_len: usize,
-    hid: Box<dyn Hid>,
+    link: Box<dyn Link>,
+    /// What the link delivered on the latest `receive`, not yet consumed.
+    chunk: Vec<u8>,
     stream: Vec<u8>,
     eq_slot: u8,
     eq_read_slot: Option<u8>,
 }
 impl Device {
-    pub(super) fn needs_continuation(&self, report: &[u8], extra_reads: usize) -> bool {
-        continuation_allowed(report, &self.stream, extra_reads)
+    /// Whether the latest `receive` left a response frame unfinished, so reading
+    /// again is worthwhile. `delivered` is what that `receive` returned.
+    pub(super) fn needs_continuation(&self, delivered: bool, extra_reads: usize) -> bool {
+        continuation_allowed(delivered, &self.stream, extra_reads)
     }
 
     /// Opens the one control interface this application should use. Fails with an
@@ -42,8 +45,12 @@ impl Device {
             usb_cable,
             sidetone_max: profile.verified().then_some(31),
             id: interface.id,
-            output_len: interface.output_len,
-            hid: interface.hid,
+            link: Box::new(HidLink::new(
+                interface.hid,
+                interface.output_len,
+                profile.route(),
+            )),
+            chunk: Vec::with_capacity(64),
             stream: Vec::with_capacity(256),
             eq_slot: 6,
             eq_read_slot: None,
@@ -68,16 +75,10 @@ impl Device {
     }
     /// Unsolicited input reports, for diagnostics. Sound state is polled instead.
     pub fn listen(&self) -> Result<Box<dyn InputStream>> {
-        self.hid.listen()
+        self.link.listen()
     }
-    fn packet(&self, body: &[u8]) -> Result<()> {
-        let mut storage = [0u8; 512];
-        let bytes = &mut storage[..self.output_len];
-        bytes[0] = 6;
-        bytes[1] = body.len() as u8;
-        bytes[2] = self.profile.route();
-        bytes[3..3 + body.len()].copy_from_slice(body);
-        self.hid.write_report(bytes)
+    fn packet(&mut self, body: &[u8]) -> Result<()> {
+        self.link.send(body)
     }
     pub fn query(&mut self, q: Query) -> Result<()> {
         if !self.profile.supports_query(q) {
@@ -186,28 +187,28 @@ impl Device {
         self.packet(&body)?;
         Ok(q)
     }
+    /// Receives whatever the headset has sent and consumes the frames it completes.
     pub fn read(&mut self, state: &mut SoundState) -> Result<QueryUpdates> {
-        let bytes = self.read_report()?;
-        Ok(self.consume_report(&bytes, state))
+        self.receive()?;
+        Ok(self.consume(state))
     }
-    pub fn read_report(&self) -> Result<[u8; 64]> {
-        let mut bytes = [0u8; 64];
-        bytes[0] = 7;
-        self.hid.get_input_report(&mut bytes)?;
-        Ok(bytes)
+    /// Takes in the bytes that have already arrived, without waiting. Returns
+    /// whether the connection delivered anything, even bytes that were unusable.
+    pub fn receive(&mut self) -> Result<bool> {
+        self.link.receive(&mut self.chunk)
     }
-    pub fn consume_report(&mut self, bytes: &[u8], state: &mut SoundState) -> QueryUpdates {
-        self.consume_report_observed(bytes, state, |_, _, _| {})
+    /// The bytes the latest `receive` delivered, before `consume` takes them.
+    pub fn chunk(&self) -> &[u8] {
+        &self.chunk
     }
-    pub(super) fn consume_report_observed(
+    pub fn consume(&mut self, state: &mut SoundState) -> QueryUpdates {
+        self.consume_observed(state, |_, _, _| {})
+    }
+    pub(super) fn consume_observed(
         &mut self,
-        bytes: &[u8],
         state: &mut SoundState,
-        mut observed: impl FnMut(&[u8], Option<Query>, &SoundState),
+        observed: impl FnMut(&[u8], Option<Query>, &SoundState),
     ) -> QueryUpdates {
-        if bytes.get(2) != Some(&self.profile.route()) {
-            return QueryUpdates::default();
-        }
         // Diagnostics can start with an empty snapshot too. Never decode a
         // wired frame using a default wireless route or a guessed level scale.
         state.family = Some(self.profile.family);
@@ -215,13 +216,11 @@ impl Device {
         state.capabilities = Some(self.profile.capabilities());
         state.sidetone_max = self.sidetone_max;
         let slot = self.eq_read_slot;
-        let updates = consume_report_bytes_with_slot(
-            &mut self.stream,
-            bytes,
-            state,
-            |frame, field, state| observed(frame, field, state),
-            slot,
-        );
+        let chunk = std::mem::take(&mut self.chunk);
+        let updates = consume_stream_bytes(&mut self.stream, &chunk, state, observed, slot);
+        // Taken: consuming twice must not feed the same bytes again.
+        self.chunk = chunk;
+        self.chunk.clear();
         self.sidetone_max = state.sidetone_max;
         updates
     }
@@ -230,16 +229,21 @@ impl Device {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{cell::RefCell, rc::Rc};
+    use crate::device::hid::Hid;
+    use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
     type Writes = Rc<RefCell<Vec<Vec<u8>>>>;
-    struct RecordingHid(Writes);
+    /// Records every output report and replays scripted input reports.
+    struct RecordingHid(Writes, RefCell<VecDeque<[u8; 64]>>);
     impl Hid for RecordingHid {
         fn write_report(&self, report: &[u8]) -> Result<()> {
             self.0.borrow_mut().push(report.to_vec());
             Ok(())
         }
-        fn get_input_report(&self, _: &mut [u8; 64]) -> Result<()> {
+        fn get_input_report(&self, report: &mut [u8; 64]) -> Result<()> {
+            if let Some(next) = self.1.borrow_mut().pop_front() {
+                *report = next;
+            }
             Ok(())
         }
         fn listen(&self) -> Result<Box<dyn InputStream>> {
@@ -247,12 +251,18 @@ mod tests {
         }
     }
     fn device(product: u16) -> (Device, Writes) {
+        device_replaying(product, &[])
+    }
+    fn device_replaying(product: u16, inputs: &[[u8; 64]]) -> (Device, Writes) {
         let writes = Writes::default();
         let profile = Profile::from_usb(0x3329, product).expect("known identity");
         let interface = Interface {
             id: "test".into(),
             output_len: 62,
-            hid: Box::new(RecordingHid(writes.clone())),
+            hid: Box::new(RecordingHid(
+                writes.clone(),
+                RefCell::new(inputs.iter().copied().collect()),
+            )),
         };
         (Device::new(profile, false, interface), writes)
     }
@@ -298,17 +308,21 @@ mod tests {
 
     #[test]
     fn replies_for_another_route_are_ignored() {
-        let (mut device, _) = device(0x4ba9);
-        let mut state = SoundState::default();
-        // A well-formed mix reply (50/50) that arrived on the wired route.
-        let reply = [7, 10, 0, 5, 0x5b, 6, 0, 0x83, 0x2c, 0, 0x0b, 0, 10];
-        assert!(device.consume_report(&reply, &mut state).is_empty());
-        assert_eq!(state.mix, None);
-        let mut dongle = reply;
+        // A well-formed mix reply (50/50) that arrived on the wired route, then
+        // the same reply on the dongle route this headset uses.
+        let mut wired = [0u8; 64];
+        wired[..13].copy_from_slice(&[7, 10, 0, 5, 0x5b, 6, 0, 0x83, 0x2c, 0, 0x0b, 0, 10]);
+        let mut dongle = wired;
         dongle[2] = 0x80;
-        assert!(device
-            .consume_report(&dongle, &mut state)
-            .contains(&Query::Mix));
+        let (mut device, _) = device_replaying(0x4ba9, &[wired, dongle]);
+        let mut state = SoundState::default();
+        assert!(device.read(&mut state).unwrap().is_empty());
+        assert_eq!(state.mix, None);
+        assert!(device.read(&mut state).unwrap().contains(&Query::Mix));
         assert_eq!(state.mix, Some((50, 50)));
+        assert!(
+            device.consume(&mut state).is_empty(),
+            "a consumed chunk is not fed twice"
+        );
     }
 }

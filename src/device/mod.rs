@@ -13,6 +13,7 @@ pub mod command;
 #[cfg(any(target_os = "linux", test))]
 mod descriptor;
 mod hid;
+mod link;
 pub mod profiles;
 pub mod protocol;
 mod selection;
