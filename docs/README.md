@@ -8,6 +8,7 @@ Start with the [project overview and downloads](../README.md).
 | [Performance measurements](PERFORMANCE.md) | Measured comparison, methodology, trial variability and reproduction |
 | [Device integration and compatibility](DEVICE_AND_COMPATIBILITY.md) | USB scheduling, latency limits, rendering, anti-cheat boundaries and visual assets |
 | [Device profiles and validation](DEVICE_PROTOCOL.md) | Experimental model identities, protocol evidence, wired connections and remaining hardware checks |
+| [Maxwell Bluetooth protocol](BLUETOOTH_PROTOCOL.md) | Classic Bluetooth SPP framing, read and write commands, and their evidence on Maxwell 1 |
 | [Linux](LINUX.md) | Wayland overlay, install, Flatpak, hardware evidence, the udev rule and diagnostics |
 | [macOS build](MACOS.md) | Experimental Apple silicon build, install, hardware evidence and limits |
 | [Build, diagnostics and releases](DEVELOPMENT.md) | Local builds, diagnostic modes, packaging and GitHub releases |
