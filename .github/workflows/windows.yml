@@ -18,6 +18,9 @@ jobs:
   linux:
     uses: ./.github/workflows/linux.yml
 
+  macos:
+    uses: ./.github/workflows/macos.yml
+
   build:
     runs-on: windows-2022
     timeout-minutes: 30
@@ -83,7 +86,7 @@ jobs:
 
   release:
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    needs: [build, linux]
+    needs: [build, linux, macos]
     runs-on: windows-2022
     timeout-minutes: 10
     concurrency:
@@ -107,6 +110,10 @@ jobs:
         with:
           name: Audeze-Overlay-flatpak-x86_64
           path: release-artifacts/flatpak
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: Audeze-Overlay-macOS-arm64
+          path: release-artifacts/macos
       - name: Assemble verified downloads from this run
         shell: pwsh
         run: ./tools/prepare-release-downloads.ps1
