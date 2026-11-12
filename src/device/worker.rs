@@ -140,12 +140,8 @@ fn resume_level_polling(
         other => other,
     }
 }
-fn query_interval(q: Query, connection: crate::model::Connection) -> Duration {
+fn query_interval(q: Query) -> Duration {
     Duration::from_millis(match q {
-        // Bluetooth shares its radio with the audio link, and the headset never
-        // announces changes, so the mix is polled. A quarter of a second still
-        // follows a dial turn closely (measured replies take 40-60 ms).
-        Query::Mix if connection == crate::model::Connection::Bluetooth => 250,
         Query::Mix => 50,
         Query::Battery => 30000,
         // Five 400 ms background queries consumed about half the serial
@@ -468,7 +464,7 @@ pub fn start(
                         flight = Some((q, written, request_sequence));
                         previous = Some(q);
                         read_ready = written + Duration::from_millis(25);
-                        due[i] = Some(written + query_interval(q, connection));
+                        due[i] = Some(written + query_interval(q));
                     }
                     let mut updated_fields = 0u16;
                     let mut received = Instant::now();
@@ -640,7 +636,7 @@ pub fn start(
                                 let retry = if waiting.iter().any(|(wq, _, _)| *wq == q) {
                                     Duration::from_millis(50)
                                 } else {
-                                    query_interval(q, connection)
+                                    query_interval(q)
                                 };
                                 due[q as usize] = Some(Instant::now() + retry);
                             }
@@ -870,7 +866,7 @@ mod tests {
         let start = Instant::now();
         let mut due = [None; 12];
         due[0] = Some(start);
-        due[Query::Battery as usize] = Some(start + query_interval(Query::Battery, WIRED));
+        due[Query::Battery as usize] = Some(start + query_interval(Query::Battery));
         let much_later = start + Duration::from_secs(400 * 24 * 3600);
         assert_eq!(
             next_query(&due, much_later, Some(Query::Mix)),
@@ -939,22 +935,7 @@ mod tests {
             ),
             Some(ReadyWork::Query(Query::EqBands))
         );
-        assert_eq!(query_interval(Query::Mix, WIRED), Duration::from_millis(50));
-        assert_eq!(
-            query_interval(Query::Mix, crate::model::Connection::Bluetooth),
-            Duration::from_millis(250)
-        );
-        for q in [Query::Side, Query::Level, Query::Noise, Query::Mute] {
-            assert_eq!(
-                query_interval(q, crate::model::Connection::Bluetooth),
-                query_interval(q, WIRED),
-                "only the mix is polled differently over Bluetooth"
-            );
-        }
-        assert_eq!(
-            query_interval(Query::Battery, crate::model::Connection::Bluetooth),
-            Duration::from_secs(30)
-        );
+        assert_eq!(query_interval(Query::Mix), Duration::from_millis(50));
         assert_eq!(query_timeout(Query::Mix, WIRED), Duration::from_millis(160));
         assert_eq!(
             query_timeout(Query::EqWriteAck, WIRED),

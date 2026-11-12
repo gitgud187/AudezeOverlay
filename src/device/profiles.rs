@@ -31,8 +31,7 @@ impl Profile {
             // Only the reads verified over Bluetooth; no ANC and no EQ.
             return matches!(
                 query,
-                Query::Mix
-                    | Query::Side
+                Query::Side
                     | Query::Level
                     | Query::Noise
                     | Query::Mute
@@ -52,10 +51,7 @@ impl Profile {
             // Only the writes verified over Bluetooth.
             return matches!(
                 command,
-                Command::Mix(_)
-                    | Command::Sidetone(_)
-                    | Command::SidetoneLevel(_)
-                    | Command::Noise(_)
+                Command::Sidetone(_) | Command::SidetoneLevel(_) | Command::Noise(_)
             );
         }
         match command {
@@ -98,6 +94,7 @@ impl Profile {
         Capabilities {
             anc: self.family == HeadsetFamily::Maxwell2Anc,
             eq_edit: self.family == HeadsetFamily::Maxwell2Anc,
+            mix: self.connection != Connection::Bluetooth,
         }
     }
     pub fn route(self) -> u8 {
@@ -141,8 +138,11 @@ mod tests {
         use super::super::{command::Command, protocol::Query};
         let profile = Profile::bluetooth_maxwell();
         assert!(!profile.verified());
+        assert!(
+            !profile.capabilities().mix,
+            "one audio stream, no game/chat split"
+        );
         for query in [
-            Query::Mix,
             Query::Side,
             Query::Level,
             Query::Noise,
@@ -153,6 +153,7 @@ mod tests {
             assert!(profile.supports_query(query), "{query:?}");
         }
         for query in [
+            Query::Mix,
             Query::Anc,
             Query::EqIndex,
             Query::EqBands,
@@ -162,7 +163,6 @@ mod tests {
             assert!(!profile.supports_query(query), "{query:?}");
         }
         for command in [
-            Command::Mix(50),
             Command::Sidetone(true),
             Command::SidetoneLevel(40),
             Command::Noise("Low".into()),
@@ -170,6 +170,7 @@ mod tests {
             assert!(profile.supports_command(&command), "{command:?}");
         }
         for command in [
+            Command::Mix(50),
             Command::Anc("On".into()),
             Command::EqSelect(2),
             Command::EqRefresh,

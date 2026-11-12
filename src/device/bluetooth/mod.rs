@@ -55,9 +55,11 @@ pub(super) fn check_permitted(frame: &[u8]) -> Result<(), String> {
     }
 }
 
-/// Whether `frame` may be sent over Bluetooth: the status reads, and the four
-/// writes verified with read-back and restore on a Maxwell 1 (mix, sidetone,
-/// sidetone level, noise removal; see `docs/BLUETOOTH_PROTOCOL.md`). Anything
+/// Whether `frame` may be sent over Bluetooth: the status reads, and the three
+/// writes verified with read-back and restore on a Maxwell 1 (sidetone, sidetone
+/// level, noise removal; see `docs/BLUETOOTH_PROTOCOL.md`). The mix is not
+/// written: it balances the dongle's two audio devices and does nothing over
+/// Bluetooth, which has one. Anything
 /// else is refused, however the caller got hold of it. Airoha headsets accept
 /// other commands, firmware update among them, which this application never sends.
 pub fn permits(frame: &[u8]) -> bool {
@@ -66,10 +68,9 @@ pub fn permits(frame: &[u8]) -> bool {
         .any(|request| request.frame() == frame)
         || matches!(
             frame,
-            // Mix 0..=20 in 5 % steps, sidetone off/on, sidetone level, noise
-            // removal off/low/high. 31 is the sidetone maximum this unit reports.
-            [0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x0b, 0x00, 0..=20]
-                | [0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x07, 0x00, 0..=1]
+            // Sidetone off/on, sidetone level, noise removal off/low/high. 31 is the
+            // sidetone maximum this unit reports.
+            [0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x07, 0x00, 0..=1]
                 | [0x05, 0x5a, 0x05, 0x00, 0x00, 0x09, 0x2c, 0x00, 0..=31]
                 | [0x05, 0x5a, 0x05, 0x00, 0x00, 0x09, 0x24, 0x00, 0..=2]
         )
@@ -194,14 +195,13 @@ mod tests {
     }
 
     #[test]
-    fn only_reads_and_the_four_verified_writes_are_permitted() {
+    fn only_reads_and_the_three_verified_writes_are_permitted() {
         for request in ReadRequest::ALL {
             assert!(permits(request.frame()), "{request:?}");
         }
         // The documented write frames, at their edges.
         for frame in [
-            &[0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x0b, 0x00, 0][..],
-            &[0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x0b, 0x00, 20],
+            &[0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x07, 0x00, 0][..],
             &[0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x07, 0x00, 1],
             &[0x05, 0x5a, 0x05, 0x00, 0x00, 0x09, 0x2c, 0x00, 31],
             &[0x05, 0x5a, 0x05, 0x00, 0x00, 0x09, 0x24, 0x00, 2],
@@ -210,7 +210,8 @@ mod tests {
         }
         // Out-of-range values, the unverified writes and arbitrary bytes.
         for frame in [
-            &[0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x0b, 0x00, 21][..],
+            // The mix write: valid on the dongle, meaningless over Bluetooth.
+            &[0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x0b, 0x00, 10][..],
             &[0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x07, 0x00, 2],
             &[0x05, 0x5a, 0x05, 0x00, 0x00, 0x09, 0x2c, 0x00, 32],
             &[0x05, 0x5a, 0x05, 0x00, 0x00, 0x09, 0x24, 0x00, 3],

@@ -38,6 +38,7 @@ fn main() {
         capabilities: Some(audeze_overlay::model::Capabilities {
             anc: true,
             eq_edit: true,
+            mix: true,
         }),
         ..Default::default()
     };
@@ -187,6 +188,12 @@ fn main() {
             false,
         ),
         (
+            "bluetooth-control",
+            audeze_overlay::model::Connection::Bluetooth,
+            false,
+            false,
+        ),
+        (
             "controls-unavailable",
             audeze_overlay::model::Connection::WirelessDongle,
             false,
@@ -200,10 +207,20 @@ fn main() {
         let mut state = sound.clone();
         state.transport = Some(transport);
         state.usb_cable = cable;
-        if transport == audeze_overlay::model::Connection::Bluetooth {
+        if name == "bluetooth-status" {
+            // Windows' passive status: connected, but no controls at all.
             state.mix = None;
             state.battery = None;
             state.muted = None;
+        }
+        if name == "bluetooth-control" {
+            // Controlled over Bluetooth: every reading but the mix, which it lacks.
+            state.mix = None;
+            state.capabilities = Some(audeze_overlay::model::Capabilities {
+                anc: false,
+                eq_edit: false,
+                mix: false,
+            });
         }
         if waiting {
             state = state.waiting_for_controls();
@@ -486,6 +503,7 @@ fn showcase() {
         capabilities: Some(audeze_overlay::model::Capabilities {
             anc: true,
             eq_edit: true,
+            mix: true,
         }),
         eq_index: Some(6),
         ..Default::default()

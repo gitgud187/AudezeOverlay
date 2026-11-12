@@ -425,14 +425,12 @@ mod tests {
     fn bluetooth_sends_bare_frames_for_the_verified_controls_only() {
         let (mut device, writes) = bluetooth_device(&[]);
         assert!(device.is_bluetooth());
-        device.set(&Command::Mix(52)).unwrap();
         device.set(&Command::Sidetone(true)).unwrap();
         device.set(&Command::Noise("High".into())).unwrap();
         device.query(Query::Battery).unwrap();
         assert_eq!(
             *writes.borrow(),
             [
-                vec![5, 0x5a, 5, 0, 0x82, 0x2c, 0x0b, 0, 10],
                 vec![5, 0x5a, 5, 0, 0x82, 0x2c, 7, 0, 1],
                 vec![5, 0x5a, 5, 0, 0, 9, 0x24, 0, 2],
                 vec![5, 0x5a, 3, 0, 0xd6, 0x0c, 0],
@@ -440,6 +438,10 @@ mod tests {
             "no HID report header or route byte"
         );
         let before = writes.borrow().len();
+        // The game/chat mix balances the dongle's two audio devices and does
+        // nothing over Bluetooth, which has one.
+        assert!(device.set(&Command::Mix(52)).is_err());
+        assert!(device.query(Query::Mix).is_err());
         assert!(device.set(&Command::Anc("On".into())).is_err());
         assert!(device.set(&Command::EqSelect(2)).is_err());
         assert!(device.query(Query::Anc).is_err());
@@ -457,9 +459,6 @@ mod tests {
         let mut state = SoundState::default();
         device.read(&mut state).unwrap();
         let commands = [
-            Command::Mix(0),
-            Command::Mix(52),
-            Command::Mix(100),
             Command::Sidetone(true),
             Command::Sidetone(false),
             Command::SidetoneLevel(0),
@@ -473,7 +472,6 @@ mod tests {
             device.set(command).unwrap();
         }
         let queries = [
-            Query::Mix,
             Query::Side,
             Query::Level,
             Query::Noise,
@@ -510,16 +508,17 @@ mod tests {
 
     #[test]
     fn bluetooth_replies_arriving_together_or_split_are_all_parsed() {
-        let mix = [5, 0x5b, 6, 0, 0x83, 0x2c, 0, 0x0b, 0, 12];
+        let noise = [5, 0x5b, 6, 0, 1, 9, 0x24, 0, 0, 2];
         let battery = [5, 0x5d, 5, 0, 0xd6, 0x0c, 0, 0, 59];
-        let both = [mix.as_slice(), battery.as_slice()].concat();
+        let both = [noise.as_slice(), battery.as_slice()].concat();
         let (mut device, _) = bluetooth_device(&[&both[..4], &both[4..]]);
         let mut state = SoundState::default();
         assert!(device.read(&mut state).unwrap().is_empty());
         let updates: Vec<_> = device.read(&mut state).unwrap().into_iter().collect();
-        assert_eq!(updates, [Query::Mix, Query::Battery]);
-        assert_eq!(state.mix, Some((40, 60)));
+        assert_eq!(updates, [Query::Noise, Query::Battery]);
+        assert_eq!(state.noise.as_deref(), Some("High"));
         assert_eq!(state.battery, Some(59));
+        assert!(state.has_readings(), "readings count without a mix");
         assert_eq!(state.transport, Some(crate::model::Connection::Bluetooth));
     }
 

@@ -139,7 +139,7 @@ fn load_profile(app: &mut App, index: usize) -> std::result::Result<(), String> 
         .get(index)
         .ok_or("Profile no longer exists.")?
         .clone();
-    if app.sound.mix.is_none() || app.sound.capabilities.is_some_and(|c| !c.eq_edit) {
+    if !app.sound.has_readings() || app.sound.capabilities.is_some_and(|c| !c.eq_edit) {
         return Err("Connect a headset with verified custom EQ editing first.".into());
     }
     let draft = app

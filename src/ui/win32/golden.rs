@@ -505,6 +505,7 @@ pub(super) unsafe fn run(app: &mut App) {
     next.capabilities = Some(audeze_overlay::model::Capabilities {
         anc: false,
         eq_edit: false,
+        mix: true,
     });
     status_changed(app, next);
     step!("status_other_model");

@@ -281,6 +281,7 @@ mod tests {
             capabilities: Some(crate::model::Capabilities {
                 anc: false,
                 eq_edit: false,
+                mix: true,
             }),
             ..Default::default()
         };

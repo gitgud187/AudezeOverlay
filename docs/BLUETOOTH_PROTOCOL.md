@@ -134,6 +134,10 @@ and bound the `len` field it accepts when parsing.
 | Auto-shutdown 60 min | `05 5A 0C 00 82 2C 01 00 01 00 10 0E 01 00 10 0E` | A/M |
 | Auto-shutdown 5 min | `05 5A 0C 00 82 2C 01 00 01 00 2C 01 01 00 2C 01` | A/M |
 
+The mix write was verified to read back, but it balances the dongle's two audio
+devices and the headset's wheel never changes it over Bluetooth. The overlay does
+not read or write it over Bluetooth.
+
 Verified write/read-back examples:
 
 | Action | Write | Read-back |
@@ -166,6 +170,8 @@ frames above. Nothing was written to the headset.
 | Process type | A bare command-line binary was aborted (SIGABRT, exit 134) at its first IOBluetooth call, with or without an Info.plist embedded in the binary. The same program inside an app bundle launched with `open` worked. |
 | Callback thread | Open-complete, data and closed callbacks arrived on the main thread's run loop. With the channel opened from a secondary thread running its own run loop and the main thread idle, no callback arrived in 10 s; the same calls on the main thread worked. |
 | Repeated reads | The mix was read every 250, 100 and 50 ms for 5 s each. Every read was answered (20, 50 and 100 of them, none lost). Median latency was 43–48 ms, 95th percentile 67–88 ms, maximum 129 ms. This shows only that the channel keeps up. It is not a recommended rate: headset battery use and audio coexistence while polling were not measured. |
+| Wheel gestures | While the game/chat wheel was turned and pressed, the sidetone state and level changed and the mix stayed 50/50, in a 25 s watch with no commands sent. This matches the headset's guide: a double-click toggles sidetone and a press then scroll sets its level. Over Bluetooth, which has one audio stream, a plain scroll has no mix to change. |
+| Level enables sidetone | Writing a sidetone level while sidetone was off switched sidetone on. The headset does this itself; adjusting the level with the wheel does the same. |
 | Stuck channel | After several aborted test runs the headset stopped accepting new control connections; the open failed after about 3 s, for every client including one that had worked the day before. Power-cycling the headset fixed it. The cause was not isolated. Close the channel when finished, and report an open failure clearly. |
 
 Read-only values seen on this unit: battery 60 % then 59 % (`0x3C`, `0x3B`),

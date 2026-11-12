@@ -44,6 +44,17 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
         );
         return;
     }
+    if i == 0 && v.sound.capabilities.is_some_and(|caps| !caps.mix) {
+        c.fitted_text(
+            "Not available over Bluetooth",
+            Box2::new(inner.x, inner.y + 28., inner.w, 28.),
+            14.,
+            SUB,
+            false,
+            false,
+        );
+        return;
+    }
     match i {
         0 => {
             if v.config.minimal_cards[0] || r.h < 190. {
@@ -454,7 +465,7 @@ pub(super) fn render_card(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, i: usiz
 
 /// Compact vector status indicators; no icon fonts or extra runtime resources.
 pub(super) fn status_icons(c: &mut Canvas, hits: &mut Vec<Hit>, v: &View, width: f32) {
-    let ink = if v.sound.mix.is_some() { FG } else { SUB };
+    let ink = if v.sound.has_readings() { FG } else { SUB };
     let row = Box2::new(16., 72., width - 32., 54.);
     c.text(
         v.sound.device.as_deref().unwrap_or("Headset disconnected"),

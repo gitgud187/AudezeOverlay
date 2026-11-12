@@ -457,7 +457,7 @@ pub(in crate::ui) fn send(app: &mut App, c: Command) {
         }
         receive_eq(app);
         app.note = "Preview — headset unchanged".into();
-    } else if app.sound.mix.is_none() {
+    } else if !app.sound.has_readings() {
         app.note = Notice::UntilConnected("Connect and turn on a supported headset.");
     } else if let Some(ctrl) = &app.controller {
         ctrl.clear_error();
@@ -645,7 +645,7 @@ pub(in crate::ui) fn changed(app: &mut App) {
         }
     }
     reconcile_mix(&mut app.pending_mix, &mut next);
-    let connected_now = app.sound.mix.is_none() && next.mix.is_some();
+    let connected_now = !app.sound.has_readings() && next.has_readings();
     if connected_now {
         app.note.connected();
     }

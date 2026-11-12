@@ -58,18 +58,22 @@ its Bluetooth connection. It is off until you turn it on: pair the headset in
 System Settings, then choose **Bluetooth control (experimental)** in the tray menu.
 macOS asks for Bluetooth permission the first time.
 
-- **What works:** the status readings, the game/chat mix, sidetone and its level,
-  and noise removal. Nothing else is sent: no ANC, EQ or firmware commands, and
-  the microphone switch is only read. Other models are not controlled over
-  Bluetooth.
+- **What works:** the status readings, sidetone and its level, and noise
+  removal. Nothing else is sent: no ANC, EQ or firmware commands, and the
+  microphone switch is only read. Other models are not controlled over Bluetooth.
+- **No game/chat mix:** the mix balances the two audio devices the dongle and a USB
+  cable present. Bluetooth carries one audio stream, so there is nothing to
+  balance; the card says it is not available. The headset's game/chat wheel works
+  the sidetone over Bluetooth: a double-click toggles it and a press then scroll
+  changes its level, as the headset's guide describes. Changing the sidetone level
+  turns sidetone on, which is the headset's own behavior.
 - **USB wins:** with the dongle or a cable connected, Bluetooth is not opened at
   all. Plugging one in while connected over Bluetooth switches to USB, and turning
   the menu item off disconnects. The dongle drops off and reappears when the headset
   connects to it, so Bluetooth waits four seconds after USB disappears before taking
   over; a brief gap does not cause a hop to Bluetooth and back.
-- **Polling:** the headset never reports changes, so they are read: the mix every
-  250 ms (50 ms over USB), the other sound settings about once a second and the
-  battery every 30 seconds.
+- **Polling:** the headset never reports changes, so they are read: the sound
+  settings about once a second and the battery every 30 seconds.
 - **Implementation:** `src/device/bluetooth/` opens the headset's serial service
   through IOBluetooth. IOBluetooth reports events on the main thread's run loop, so
   the channel lives there and the worker reaches it through that loop. The frames
@@ -94,8 +98,9 @@ dongle. The overlay was checked on one Retina display above a fullscreen
 terminal. This is one device, firmware and display, not a broader claim.
 
 Over Bluetooth, one Maxwell Xbox (firmware v1.0.1.74, paired as "Audeze Maxwell
-BT") returned all readings through the app's worker, and mix, sidetone level and
-noise removal each changed, read back and were restored. Sidetone takes about a
+BT") returned all readings through the app's worker, and sidetone, sidetone level
+and noise removal each changed and read back. The mix also read back when written,
+but does nothing over Bluetooth and is no longer offered. Sidetone takes about a
 second to switch: turning it on and sending off again straight after left it on
 until off was sent once more after it had settled. The channel stopped opening
 for a while after several aborted test runs and recovered when the headset was

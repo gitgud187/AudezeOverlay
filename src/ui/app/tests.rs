@@ -699,3 +699,28 @@ fn deferred_export_keeps_the_tuning_selected_when_the_dialog_opened() {
     assert!(app.pending_profile_file.is_none());
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn bluetooth_controls_are_not_blocked_by_the_missing_mix() {
+    use audeze_overlay::model::{Capabilities, Connection, SoundState};
+    let mut app = open_app();
+    app.demo = false;
+    // Bluetooth has no game/chat mix. Any reading means the headset is live.
+    app.sound = SoundState {
+        transport: Some(Connection::Bluetooth),
+        capabilities: Some(Capabilities {
+            anc: false,
+            eq_edit: false,
+            mix: false,
+        }),
+        sidetone: Some(false),
+        ..Default::default()
+    };
+    send(&mut app, Command::Sidetone(true));
+    assert!(!matches!(app.note, Notice::UntilConnected(_)));
+    // Before the first reading, the same connection still waits.
+    app.note.clear();
+    app.sound.sidetone = None;
+    send(&mut app, Command::Sidetone(true));
+    assert!(matches!(app.note, Notice::UntilConnected(_)));
+}

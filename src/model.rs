@@ -41,6 +41,14 @@ impl Connection {
 pub struct Capabilities {
     pub anc: bool,
     pub eq_edit: bool,
+    /// The game/chat mix exists on this connection. It balances the two audio
+    /// devices the dongle and cable present, so Bluetooth, with one audio stream,
+    /// has none.
+    #[serde(default = "mix_by_default")]
+    pub mix: bool,
+}
+fn mix_by_default() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -103,6 +111,20 @@ pub fn reconcile_mix(target: &mut Option<MixTarget>, incoming: &mut SoundState) 
     }
 }
 impl SoundState {
+    /// Whether the headset has answered at all yet. The mix is the first reading
+    /// of a connection that has one; over Bluetooth, which has none, any other
+    /// reading counts. Controls and notices wait for this, not for one field.
+    pub fn has_readings(&self) -> bool {
+        if self.capabilities.is_some_and(|caps| !caps.mix) {
+            self.sidetone.is_some()
+                || self.sidetone_level.is_some()
+                || self.noise.is_some()
+                || self.muted.is_some()
+                || self.battery.is_some()
+        } else {
+            self.mix.is_some()
+        }
+    }
     /// The USB endpoint is still present, but its control readings have expired.
     /// Keep its identity without presenting old values or inferring radio state.
     pub fn waiting_for_controls(&self) -> Self {
@@ -204,6 +226,27 @@ pub fn mix_from_point(dx: f32, dy: f32) -> u8 {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn readings_come_from_the_mix_unless_the_connection_has_none() {
+        let mut state = SoundState::default();
+        assert!(!state.has_readings());
+        state.battery = Some(50);
+        assert!(!state.has_readings(), "a dongle waits for its mix");
+        state.mix = Some((50, 50));
+        assert!(state.has_readings());
+
+        let mut bluetooth = SoundState {
+            capabilities: Some(Capabilities {
+                anc: false,
+                eq_edit: false,
+                mix: false,
+            }),
+            ..Default::default()
+        };
+        assert!(!bluetooth.has_readings());
+        bluetooth.noise = Some("Low".into());
+        assert!(bluetooth.has_readings(), "any reading counts without a mix");
+    }
     #[test]
     fn silent_controls_clear_readings_without_losing_the_present_endpoint() {
         use super::*;
