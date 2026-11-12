@@ -19,7 +19,8 @@ use objc2::{
     AllocAnyThread, DefinedClass, MainThreadMarker,
 };
 use objc2_core_foundation::{
-    kCFRunLoopDefaultMode, CFAbsoluteTimeGetCurrent, CFRunLoop, CFRunLoopTimer,
+    kCFRunLoopCommonModes, kCFRunLoopDefaultMode, CFAbsoluteTimeGetCurrent, CFRunLoop,
+    CFRunLoopTimer,
 };
 use objc2_foundation::NSData;
 use objc2_io_bluetooth::{
@@ -89,7 +90,11 @@ impl Channel {
         let (ready_tx, ready_rx) = mpsc::channel();
         let name = device_name.to_owned();
         on_main_run_loop(move || {
-            let _ = ready_tx.send(install_session(&name, event_tx));
+            // If the opener already gave up (timeout), nobody will ever drop the
+            // channel just opened, so close it here instead of leaving it behind.
+            if let Err(mpsc::SendError(Ok(()))) = ready_tx.send(install_session(&name, event_tx)) {
+                close_session();
+            }
         })
         .map_err(OpenError::Failed)?;
         ready_rx.recv_timeout(OPEN_TIMEOUT).map_err(|_| {
@@ -133,6 +138,7 @@ impl Channel {
     /// Sends `bytes` and returns once the channel has taken them. Callers choose
     /// the bytes; this layer does not interpret them.
     pub fn write(&self, bytes: &[u8]) -> Result<()> {
+        super::check_permitted(bytes)?;
         let length = u16::try_from(bytes.len())
             .ok()
             .filter(|length| *length <= self.mtu)
@@ -146,19 +152,26 @@ impl Channel {
         let (done_tx, done_rx) = mpsc::channel();
         on_main_run_loop(move || {
             let status = with_session(|session| {
+                // SAFETY: plain property read on the live channel.
+                if unsafe { session.channel.isTransmissionPaused() } {
+                    // A synchronous write would block the main thread until the
+                    // headset resumes the flow. Refuse instead.
+                    return Err(());
+                }
                 // SAFETY: `data` is a live buffer of exactly `length` bytes for the
                 // whole synchronous call; IOBluetooth does not retain the pointer.
-                unsafe {
+                Ok(unsafe {
                     session
                         .channel
                         .writeSync_length(data.as_mut_ptr().cast::<c_void>(), length)
-                }
+                })
             });
             let _ = done_tx.send(status);
         })?;
         match done_rx.recv_timeout(WRITE_TIMEOUT) {
-            Ok(Some(0)) => Ok(()),
-            Ok(Some(status)) => Err(format!("The write failed (IOReturn {status:#x}).")),
+            Ok(Some(Ok(0))) => Ok(()),
+            Ok(Some(Ok(status))) => Err(format!("The write failed (IOReturn {status:#x}).")),
+            Ok(Some(Err(()))) => Err("The headset is not accepting data right now.".into()),
             Ok(None) => Err("The Bluetooth channel is closed.".into()),
             Err(_) => Err("The main run loop did not accept the write.".into()),
         }
@@ -169,12 +182,7 @@ impl Drop for Channel {
     fn drop(&mut self) {
         let (done_tx, done_rx) = mpsc::channel();
         let queued = on_main_run_loop(move || {
-            let session = SESSION.with(|cell| cell.borrow_mut().take());
-            if let Some(session) = session {
-                // SAFETY: closing a channel this thread opened; the status is not
-                // actionable during teardown.
-                let _ = unsafe { session.channel.closeChannel() };
-            }
+            close_session();
             let _ = done_tx.send(());
         });
         if queued.is_ok() {
@@ -214,9 +222,13 @@ pub fn host_main_run_loop<T: Send + 'static>(
         .name("bluetooth-worker".into())
         .spawn(move || {
             let result = work();
-            if let Some(main) = CFRunLoop::main() {
-                main.stop();
-            }
+            // Queued, not called directly: a stop issued before the loop starts
+            // running would be lost and `run` would never return.
+            let _ = on_main_run_loop(|| {
+                if let Some(main) = CFRunLoop::main() {
+                    main.stop();
+                }
+            });
             result
         })
         .map_err(|e| format!("Could not start the worker thread: {e}"))?;
@@ -240,7 +252,7 @@ fn on_main_run_loop(job: impl FnOnce() + Send + 'static) -> Result<()> {
     // copies and retains the block, whose captures are `Send`; it only runs on
     // the main thread, which is where the session lives.
     unsafe {
-        run_loop.perform_block(kCFRunLoopDefaultMode.map(|mode| &**mode), Some(&block));
+        run_loop.perform_block(kCFRunLoopCommonModes.map(|mode| &**mode), Some(&block));
     }
     run_loop.wake_up();
     Ok(())
@@ -260,6 +272,29 @@ thread_local! {
 /// Runs `action` with the open session, or returns `None` if there is none.
 fn with_session<R>(action: impl FnOnce(&Session) -> R) -> Option<R> {
     SESSION.with(|cell| cell.borrow().as_ref().map(action))
+}
+
+/// Closes and forgets the open session, if any. Main thread only.
+fn close_session() {
+    let session = SESSION.with(|cell| cell.borrow_mut().take());
+    if let Some(session) = session {
+        // SAFETY: both calls are on the thread that opened the channel. The delegate
+        // is detached first because IOBluetooth does not retain it, so it cannot be
+        // called after it is released below; the close status is not actionable.
+        unsafe {
+            let _ = session.channel.setDelegate(None);
+            let _ = session.channel.closeChannel();
+        }
+    }
+}
+
+/// Closes the open channel, if any, before the process exits. The application's
+/// own quit calls this on the main thread; a process that simply ends would leave
+/// the close to macOS. Does nothing off the main thread.
+pub fn close_open_channel() {
+    if MainThreadMarker::new().is_some() {
+        close_session();
+    }
 }
 
 /// Opens the channel and stores it as the main thread's session.
@@ -366,7 +401,16 @@ fn open_channel(name: &str, events: Sender<Event>) -> OpenResult<Session> {
 fn find_device(name: &str) -> OpenResult<Retained<IOBluetoothDevice>> {
     // SAFETY: class method without preconditions; it returns nil when nothing is paired.
     let paired = unsafe { IOBluetoothDevice::pairedDevices() }
-        .ok_or_else(|| OpenError::Absent("No paired Bluetooth devices were found.".into()))?;
+        .filter(|devices| !devices.is_empty())
+        .ok_or_else(|| {
+            // macOS hides paired devices from an app without Bluetooth permission,
+            // so an empty list may mean access was denied rather than nothing paired.
+            OpenError::Failed(
+                "No paired Bluetooth devices are visible. If Bluetooth access was denied, \
+                 allow Audeze Overlay in System Settings > Privacy & Security > Bluetooth."
+                    .into(),
+            )
+        })?;
     let mut matches = paired
         .iter()
         .filter_map(|object| object.downcast::<IOBluetoothDevice>().ok())

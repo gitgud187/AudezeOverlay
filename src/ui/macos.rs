@@ -969,6 +969,9 @@ struct MacShell {
 }
 impl MacShell {
     fn quit_now(&self) {
+        // Leave the headset's Bluetooth channel closed, not abandoned: a stale
+        // session can keep it from accepting a new connection.
+        device::bluetooth::close_open_channel();
         let app = NSApplication::sharedApplication(mtm());
         app.stop(None);
         // `stop` only takes effect after the current event. A source or timer

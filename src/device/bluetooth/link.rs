@@ -1,5 +1,5 @@
 //! The Bluetooth channel as a [`Link`] for the sound protocol.
-use super::{permits, Channel, Event};
+use super::{check_permitted, Channel, Event};
 use crate::device::link::Link;
 use std::time::Duration;
 
@@ -19,11 +19,9 @@ impl BluetoothLink {
 
 impl Link for BluetoothLink {
     fn send(&mut self, frame: &[u8]) -> Result<()> {
-        // Last line of defense: the profile and the UI already restrict commands,
-        // but this link never puts anything else on the air.
-        if !permits(frame) {
-            return Err("This request is not allowed over Bluetooth.".into());
-        }
+        // The channel enforces the allow-list too; checking here keeps the
+        // refusal independent of that and testable without a headset.
+        check_permitted(frame)?;
         self.channel.write(frame)
     }
 

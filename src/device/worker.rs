@@ -87,7 +87,20 @@ fn ready_work(
         next_query(due, now, previous).map(|i| ReadyWork::Query(QUERIES[i]))
     }
 }
-fn query_timeout(q: Query) -> Duration {
+/// How long to wait before trying Bluetooth again after it failed to connect.
+const BLUETOOTH_RETRY: Duration = Duration::from_secs(15);
+fn query_timeout(q: Query, connection: crate::model::Connection) -> Duration {
+    let wired = query_timeout_wired(q);
+    if connection == crate::model::Connection::Bluetooth {
+        // Bluetooth replies were measured at 40-130 ms and share the radio with
+        // audio. A late reply is still parsed, but a timeout clears the reading
+        // for a moment, so give Bluetooth more room than the wired path.
+        wired.max(Duration::from_millis(250))
+    } else {
+        wired
+    }
+}
+fn query_timeout_wired(q: Query) -> Duration {
     Duration::from_millis(match q {
         Query::Mix => 160,
         Query::EqWriteAck | Query::EqSelectAck => 500,
@@ -289,11 +302,19 @@ pub fn start(
             let mut retry_after = Duration::from_secs(2);
             let mut unavailable = None;
             let result = (|| -> Result<()> {
-                let mut device = Device::open_with(
+                let mut device = match Device::open_with(
                     worker
                         .bluetooth_allowed
                         .load(std::sync::atomic::Ordering::Acquire),
-                )?;
+                ) {
+                    Ok(device) => device,
+                    Err(error) => {
+                        if error.bluetooth_failed {
+                            retry_after = BLUETOOTH_RETRY;
+                        }
+                        return Err(error.message);
+                    }
+                };
                 let connection = device.profile.connection;
                 let mut restore_mix =
                     cable_mix.reconnect(device.profile, device.usb_cable, Instant::now());
@@ -574,7 +595,7 @@ pub fn start(
                                 }
                                 pending_readback = Some(readback);
                             }
-                        } else if started.elapsed() >= query_timeout(q) {
+                        } else if started.elapsed() >= query_timeout(q, connection) {
                             trace.record_with(
                                 "timeout",
                                 Some(q),
@@ -746,7 +767,7 @@ pub fn start(
                         }
                     }
                     let wake_at = if let Some((q, t, _)) = flight {
-                        read_ready.min(t + query_timeout(q))
+                        read_ready.min(t + query_timeout(q, connection))
                     } else {
                         let next = if worker.pending.lock().unwrap().is_empty() {
                             due[..7]
@@ -899,10 +920,30 @@ mod tests {
             query_interval(Query::Battery, crate::model::Connection::Bluetooth),
             Duration::from_secs(30)
         );
-        assert_eq!(query_timeout(Query::Mix), Duration::from_millis(160));
-        assert_eq!(query_timeout(Query::EqWriteAck), Duration::from_millis(500));
-        assert_eq!(query_timeout(Query::Anc), Duration::from_millis(100));
-        assert_eq!(query_timeout(Query::EqBands), Duration::from_millis(250));
+        assert_eq!(query_timeout(Query::Mix, WIRED), Duration::from_millis(160));
+        assert_eq!(
+            query_timeout(Query::EqWriteAck, WIRED),
+            Duration::from_millis(500)
+        );
+        assert_eq!(query_timeout(Query::Anc, WIRED), Duration::from_millis(100));
+        assert_eq!(
+            query_timeout(Query::EqBands, WIRED),
+            Duration::from_millis(250)
+        );
+        // Bluetooth never waits less than the wired path, and at least 250 ms.
+        let bluetooth = crate::model::Connection::Bluetooth;
+        assert_eq!(
+            query_timeout(Query::Mix, bluetooth),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            query_timeout(Query::Battery, bluetooth),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            query_timeout(Query::EqWriteAck, bluetooth),
+            Duration::from_millis(500)
+        );
     }
     #[test]
     fn eq_saves_yield_to_due_mix_and_eq_is_never_polled_when_idle() {
@@ -961,7 +1002,7 @@ mod tests {
                 + if index % 2 == 0 {
                     Duration::from_millis(30)
                 } else {
-                    query_timeout(q)
+                    query_timeout(q, WIRED)
                 };
             assert_eq!(
                 ready_work(
@@ -1047,7 +1088,7 @@ mod tests {
         assert_eq!(
             next_query(
                 &due,
-                now + query_timeout(QUERIES[background]),
+                now + query_timeout(QUERIES[background], WIRED),
                 Some(QUERIES[background])
             ),
             Some(0)

@@ -40,6 +40,10 @@ mod probe {
         time::{Duration, Instant},
     };
 
+    /// Fastest repeated-read interval the diagnostic allows, so a typo cannot flood
+    /// the headset.
+    const MIN_POLL_MS: u64 = 25;
+
     pub struct Options {
         device: String,
         idle_seconds: u64,
@@ -227,7 +231,7 @@ mod probe {
         seconds: u64,
     ) -> Result<(), String> {
         println!("\n== mix read every {interval_ms} ms for {seconds} s");
-        let interval = Duration::from_millis(interval_ms.max(1));
+        let interval = Duration::from_millis(interval_ms.max(MIN_POLL_MS));
         let started = Instant::now();
         let mut next_send = started;
         let mut in_flight: VecDeque<Instant> = VecDeque::new();

@@ -11,6 +11,29 @@ use super::protocol::{consume_stream_bytes, continuation_allowed, Query, QueryUp
 use super::{hid, selection};
 use crate::model::SoundState;
 type Result<T> = std::result::Result<T, String>;
+/// Why [`Device::open_with`] found nothing to control.
+#[derive(Debug)]
+pub struct OpenError {
+    pub message: String,
+    /// A Bluetooth connection was attempted and failed. Retrying it costs a
+    /// connection attempt to a headset that may be playing audio, so the caller
+    /// should wait longer than for "nothing connected".
+    pub bluetooth_failed: bool,
+}
+impl OpenError {
+    fn usb(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            bluetooth_failed: false,
+        }
+    }
+}
+impl From<OpenError> for String {
+    fn from(error: OpenError) -> Self {
+        error.message
+    }
+}
+
 pub struct Device {
     pub profile: Profile,
     /// Matching wired USB identity present, even if firmware exposes controls
@@ -36,20 +59,30 @@ impl Device {
     /// Opens the one control interface this application should use. Fails with an
     /// explanation when nothing usable is connected or the choice is ambiguous.
     pub fn open() -> Result<Self> {
-        Self::open_with(false)
+        Self::open_with(false).map_err(String::from)
     }
     /// Like [`Device::open`], and when `bluetooth` is allowed and no USB device is
     /// connected, falls back to the headset's Bluetooth control channel. A USB
     /// device always wins: with the dongle or cable present, Bluetooth is not
     /// opened at all. Several USB candidates are an error, never a reason to fall
     /// back. Bluetooth is only attempted where it exists (macOS).
-    pub fn open_with(bluetooth: bool) -> Result<Self> {
-        let found = hid::enumerate()?;
+    pub fn open_with(bluetooth: bool) -> std::result::Result<Self, OpenError> {
+        let found = hid::enumerate().map_err(OpenError::usb)?;
+        let wired_seen = !found.wired_seen.is_empty();
         match selection::choose(found.candidates, &found.wired_seen) {
             Ok(chosen) => Ok(Self::new(chosen.profile, chosen.usb_cable, chosen.endpoint)),
-            Err(selection::SelectionError::NoDevice) if bluetooth => Self::open_bluetooth()
-                .map_err(|e| e.unwrap_or_else(|| selection::SelectionError::NoDevice.to_string())),
-            Err(error) => Err(error.to_string()),
+            // A cable that is present but whose interface cannot be opened is a USB
+            // problem to report, not a reason to switch to Bluetooth behind it.
+            Err(selection::SelectionError::NoDevice) if bluetooth && !wired_seen => {
+                Self::open_bluetooth().map_err(|failure| match failure {
+                    Some(message) => OpenError {
+                        message,
+                        bluetooth_failed: true,
+                    },
+                    None => OpenError::usb(selection::SelectionError::NoDevice.to_string()),
+                })
+            }
+            Err(error) => Err(OpenError::usb(error.to_string())),
         }
     }
     /// Opens the Bluetooth control channel. `Err(None)` means there is no headset
@@ -101,7 +134,7 @@ impl Device {
         if self.is_bluetooth() {
             return Ok(!bluetooth_allowed || Self::open_with(false).is_ok());
         }
-        let current = Self::open_with(false)?;
+        let current = Self::open_with(false).map_err(String::from)?;
         Ok(!self.same_endpoint(&current))
     }
     pub fn same_endpoint(&self, other: &Self) -> bool {
@@ -412,6 +445,53 @@ mod tests {
         assert!(device.query(Query::Anc).is_err());
         assert!(device.query(Query::EqBands).is_err());
         assert_eq!(writes.borrow().len(), before, "nothing else was sent");
+    }
+
+    /// The Bluetooth link refuses anything outside its allow-list, so every frame the
+    /// profile lets `Device` build, across each command's whole input range, must
+    /// be on it; otherwise a control the profile advertises would fail on the air.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn every_frame_the_bluetooth_profile_can_build_is_on_the_allow_list() {
+        let (mut device, writes) = bluetooth_device(&[&[5, 0x5b, 6, 0, 1, 9, 0x2d, 0, 0, 31]]);
+        let mut state = SoundState::default();
+        device.read(&mut state).unwrap();
+        let commands = [
+            Command::Mix(0),
+            Command::Mix(52),
+            Command::Mix(100),
+            Command::Sidetone(true),
+            Command::Sidetone(false),
+            Command::SidetoneLevel(0),
+            Command::SidetoneLevel(50),
+            Command::SidetoneLevel(100),
+            Command::Noise("Off".into()),
+            Command::Noise("Low".into()),
+            Command::Noise("High".into()),
+        ];
+        for command in &commands {
+            device.set(command).unwrap();
+        }
+        let queries = [
+            Query::Mix,
+            Query::Side,
+            Query::Level,
+            Query::Noise,
+            Query::Mute,
+            Query::Battery,
+            Query::MaxSidetone,
+        ];
+        for query in queries {
+            device.query(query).unwrap();
+        }
+        let frames = writes.borrow();
+        assert_eq!(frames.len(), commands.len() + queries.len());
+        for frame in frames.iter() {
+            assert!(
+                crate::device::bluetooth::permits(frame),
+                "{frame:02x?} would be refused over Bluetooth"
+            );
+        }
     }
 
     #[test]

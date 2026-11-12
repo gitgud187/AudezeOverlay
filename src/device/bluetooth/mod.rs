@@ -2,13 +2,14 @@
 //!
 //! The channel carries the same `05 5A`/`05 5B`/`05 5D` frames as the USB dongle,
 //! without the HID report wrapper. Protocol notes and the evidence behind each
-//! frame are in `docs/BLUETOOTH_PROTOCOL.md`. Nothing in the application uses this
-//! channel yet; it exists for the read-only `probe-bluetooth` diagnostic.
+//! frame are in `docs/BLUETOOTH_PROTOCOL.md`. The device worker uses the channel
+//! when the user has turned Bluetooth control on and no USB device is connected;
+//! the read-only `probe-bluetooth` diagnostic uses it too.
 mod link;
 mod mac;
 
 pub(super) use link::BluetoothLink;
-pub use mac::{host_main_run_loop, Channel, Event};
+pub use mac::{close_open_channel, host_main_run_loop, Channel, Event};
 
 /// Exact name the headset is paired under. Names are user-editable, so this is a
 /// lookup key for the diagnostic and never a capability grant.
@@ -41,6 +42,16 @@ impl OpenError {
 impl From<OpenError> for String {
     fn from(error: OpenError) -> Self {
         error.message().to_owned()
+    }
+}
+
+/// Refuses any frame outside [`permits`]. Every path that writes to the channel
+/// goes through this, so no caller can put other bytes on the air.
+pub(super) fn check_permitted(frame: &[u8]) -> Result<(), String> {
+    if permits(frame) {
+        Ok(())
+    } else {
+        Err("This request is not allowed over Bluetooth.".into())
     }
 }
 
@@ -217,6 +228,15 @@ mod tests {
         ] {
             assert!(!permits(frame), "{frame:02x?}");
         }
+    }
+
+    #[test]
+    fn the_shared_check_refuses_what_is_not_permitted() {
+        for request in ReadRequest::ALL {
+            assert!(check_permitted(request.frame()).is_ok());
+        }
+        assert!(check_permitted(&[0x05, 0x5a, 0x03, 0x00, 0x51, 0x1c, 0x00]).is_err());
+        assert!(check_permitted(&[]).is_err());
     }
 
     #[test]
