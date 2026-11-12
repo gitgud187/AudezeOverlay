@@ -105,6 +105,7 @@ pub fn start(hwnd: isize, shared: Arc<Mutex<SoundState>>) -> Controller {
     let (tx, rx) = sync_channel(1);
     let controller = Controller {
         topology_changed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        bluetooth_allowed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         sequence: Arc::new(AtomicU64::new(0)),
         mix_sequence: Arc::new(AtomicU64::new(0)),
         pending: Arc::new(Mutex::new(VecDeque::new())),
