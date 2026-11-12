@@ -18,6 +18,12 @@ pub(super) trait Link {
     /// it was usable. The caller reads again only while that is true and a frame
     /// is still incomplete.
     fn receive(&mut self, chunk: &mut Vec<u8>) -> Result<bool>;
+    /// The bytes of the latest `receive` as they were on the wire, for traces.
+    /// `chunk` is what that `receive` returned; a link that adds a wrapper around
+    /// the frames returns the wrapped bytes instead.
+    fn wire_bytes<'a>(&'a self, chunk: &'a [u8]) -> &'a [u8] {
+        chunk
+    }
     /// Unsolicited reports, for diagnostics. Connections without them say so.
     fn listen(&self) -> Result<Box<dyn InputStream>> {
         Err("This connection has no unsolicited report stream.".into())
@@ -34,6 +40,8 @@ pub(super) struct HidLink {
     /// Length of the output report, report ID included.
     output_len: usize,
     route: u8,
+    /// The latest input report exactly as read, for traces.
+    last_report: [u8; 64],
 }
 
 impl HidLink {
@@ -42,6 +50,7 @@ impl HidLink {
             hid,
             output_len,
             route,
+            last_report: [0; 64],
         }
     }
 }
@@ -71,7 +80,13 @@ impl Link for HidLink {
         if let Some(body) = report_body(&report, self.route) {
             chunk.extend_from_slice(body);
         }
+        self.last_report = report;
         Ok(report[1] != 0)
+    }
+
+    fn wire_bytes<'a>(&'a self, _chunk: &'a [u8]) -> &'a [u8] {
+        let used = (self.last_report[1] as usize + 3).min(self.last_report.len());
+        &self.last_report[..used]
     }
 
     fn listen(&self) -> Result<Box<dyn InputStream>> {
@@ -143,6 +158,21 @@ mod tests {
         assert!(chunk.is_empty(), "but it is not for the dongle");
         assert!(link.receive(&mut chunk).unwrap());
         assert_eq!(chunk, mix);
+    }
+
+    #[test]
+    fn traces_keep_the_report_header_the_latency_tool_reads() {
+        let mix = [5, 0x5b, 6, 0, 0x83, 0x2c, 0, 0x0b, 0, 10];
+        let mut link = link_with(&[report(0x80, &mix), report(0, &mix)], 0x80);
+        let mut chunk = vec![];
+        link.receive(&mut chunk).unwrap();
+        let wire = link.wire_bytes(&chunk);
+        assert_eq!(wire[..3], [7, 10, 0x80], "report ID, length, route");
+        assert_eq!(&wire[3..], mix);
+        // A report for the other route yields no frame bytes but is still traced.
+        link.receive(&mut chunk).unwrap();
+        assert!(chunk.is_empty());
+        assert_eq!(link.wire_bytes(&chunk)[..3], [7, 10, 0]);
     }
 
     #[test]
