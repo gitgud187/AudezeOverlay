@@ -18,7 +18,9 @@ official Audeze application. Dependencies point toward data and domain rules.
 | Device profiles | Explicit USB identities, model capabilities and control routing | `src/device/profiles.rs` |
 | Wire protocol | Query types, response framing and frame parsing; pure, no device access | `src/device/protocol.rs` |
 | Device selection | Choosing the one control interface to use; ambiguous models or duplicates are rejected | `src/device/selection.rs` |
-| Device session | Sound commands, polling and reply handling over one HID interface | `src/device/usb.rs` |
+| Device session | Sound commands, polling and reply handling over one connection | `src/device/usb.rs` |
+| Link | What carries the frames: `send` a request, `receive` the bytes that arrived. `HidLink` owns the HID report wrapper and route byte | `src/device/link.rs` |
+| Bluetooth control | The original Maxwell's RFCOMM channel (macOS IOBluetooth) and the allow-list of frames that may be sent | `src/device/bluetooth/` |
 | HID transport | Per-platform enumeration and report I/O: Win32, and Linux hidraw with hot-plug | `src/device/hid.rs`, `src/device/hid/` |
 | Report descriptors | Finding the vendor control collection in a HID report descriptor | `src/device/descriptor.rs` |
 | USB scheduling | Worker thread, reads, acknowledgments, reconnects, tracing | `src/device/worker.rs` |

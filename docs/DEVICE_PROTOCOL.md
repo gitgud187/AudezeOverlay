@@ -6,7 +6,9 @@
 
 The current Audeze App targets Maxwell, Maxwell 2 and Maxwell 2 ANC. This branch
 recognizes their PlayStation and Xbox USB identities. This does not include older
-HQ-only products such as Mobius and Penrose, nor a Bluetooth control transport.
+HQ-only products such as Mobius and Penrose. A Bluetooth control transport exists
+only for the original Maxwell on macOS (see `docs/MACOS.md`); no other platform or
+model has one.
 
 The Maxwell 2 ANC PlayStation dongle (`3329:4ba9`) has been tested on hardware.
 On 11 October 2026, wired `4baa` status reads and mix restoration were also checked.

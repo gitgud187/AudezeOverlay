@@ -79,6 +79,8 @@ interface, trait, or service wrapper for every struct.
 | `src/config.rs` | Defaults, migration, bounds and preference persistence |
 | `src/device/command.rs` | Typed commands, sequencing and bounded/coalesced dispatch |
 | `src/device/usb.rs` | Device access, protocol encoding, framing and parsing |
+| `src/device/link.rs` | The connection a device speaks over; HID report wrapping lives in `HidLink` |
+| `src/device/bluetooth/` | Bluetooth control channel (macOS) and the allow-list of frames that may be sent |
 | `src/device/worker.rs` | Scheduling, replies, readbacks and reconnection |
 | `src/ui/draw.rs`, `src/ui/view/` | Drawing primitives and state-to-pixels/hit regions |
 | `src/ui/presentation.rs` | Presentation and animation state |

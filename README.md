@@ -107,8 +107,9 @@ shortcut that opens the panel. [Full settings and controls guide](docs/USER_GUID
 plus wired status reads and mix recovery across cable changes (`3329:4BAA`).
 Maxwell Xbox dongle (`3329:4B18`) on macOS 27 (arm64) for status, controls,
 restore and unplug/replug. Other Maxwell identities and wired EQ editing remain
-experimental. Bluetooth is limited to Windows connection status, with no
-Bluetooth sound controls.
+experimental. The original Maxwell can also be controlled over Bluetooth on
+macOS (off until turned on, experimental, one unit tested). Windows shows
+Bluetooth connection status only, with no Bluetooth sound controls.
 See the [validation matrix](docs/DEVICE_PROTOCOL.md) before trying another model.
 Use borderless/windowed games;
 exclusive fullscreen can prevent ordinary desktop overlays from appearing.
