@@ -64,7 +64,9 @@ macOS asks for Bluetooth permission the first time.
   Bluetooth.
 - **USB wins:** with the dongle or a cable connected, Bluetooth is not opened at
   all. Plugging one in while connected over Bluetooth switches to USB, and turning
-  the menu item off disconnects.
+  the menu item off disconnects. The dongle drops off and reappears when the headset
+  connects to it, so Bluetooth waits four seconds after USB disappears before taking
+  over; a brief gap does not cause a hop to Bluetooth and back.
 - **Polling:** the headset never reports changes, so they are read: the mix every
   250 ms (50 ms over USB), the other sound settings about once a second and the
   battery every 30 seconds.

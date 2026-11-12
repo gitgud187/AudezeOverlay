@@ -89,6 +89,16 @@ fn ready_work(
 }
 /// How long to wait before trying Bluetooth again after it failed to connect.
 const BLUETOOTH_RETRY: Duration = Duration::from_secs(15);
+/// How long a USB device must be gone before Bluetooth takes over. The dongle
+/// re-enumerates when the headset connects to it, and the headset has refused
+/// connections after rapid Bluetooth open/close cycles, so a brief gap must not
+/// cause a hop to Bluetooth and back.
+const BLUETOOTH_GRACE: Duration = Duration::from_secs(4);
+/// Whether Bluetooth may be opened now: the user allows it and no USB device was
+/// in use a moment ago.
+fn bluetooth_fallback_allowed(allowed: bool, usb_lost_at: Option<Instant>, now: Instant) -> bool {
+    allowed && usb_lost_at.is_none_or(|lost| now.saturating_duration_since(lost) >= BLUETOOTH_GRACE)
+}
 fn query_timeout(q: Query, connection: crate::model::Connection) -> Duration {
     let wired = query_timeout_wired(q);
     if connection == crate::model::Connection::Bluetooth {
@@ -292,6 +302,9 @@ pub fn start(
         let mut delivery_sequence = 0u64;
         let mut cable_mix = super::cable_mix::CableMix::default();
         let mut bluetooth = super::bluetooth_status::connected();
+        // When the last USB session ended, to tell a re-enumerating dongle from an
+        // unplugged one.
+        let mut usb_lost_at: Option<Instant> = None;
         loop {
             if worker
                 .topology_changed
@@ -301,12 +314,15 @@ pub fn start(
             }
             let mut retry_after = Duration::from_secs(2);
             let mut unavailable = None;
+            let mut usb_session = false;
             let result = (|| -> Result<()> {
-                let mut device = match Device::open_with(
+                let mut device = match Device::open_with(bluetooth_fallback_allowed(
                     worker
                         .bluetooth_allowed
                         .load(std::sync::atomic::Ordering::Acquire),
-                ) {
+                    usb_lost_at,
+                    Instant::now(),
+                )) {
                     Ok(device) => device,
                     Err(error) => {
                         if error.bluetooth_failed {
@@ -316,6 +332,7 @@ pub fn start(
                     }
                 };
                 let connection = device.profile.connection;
+                usb_session = !device.is_bluetooth();
                 let mut restore_mix =
                     cable_mix.reconnect(device.profile, device.usb_cable, Instant::now());
                 let restore_until = Instant::now() + Duration::from_secs(1);
@@ -794,6 +811,9 @@ pub fn start(
                     }
                 }
             })();
+            if usb_session {
+                usb_lost_at = Some(Instant::now());
+            }
             if let Err(e) = result {
                 let next = unavailable.unwrap_or_else(|| SoundState {
                     status: if bluetooth.is_some() {
@@ -857,6 +877,21 @@ mod tests {
             Some(Query::Battery as usize)
         );
         assert_eq!(next_query(&due, much_later, Some(Query::Battery)), Some(0));
+    }
+    #[test]
+    fn bluetooth_waits_out_a_dongle_that_is_only_re_enumerating() {
+        let now = Instant::now();
+        let ago = |secs| now.checked_sub(Duration::from_secs(secs)).unwrap();
+        // Never used USB, or it has been gone a while: Bluetooth may open.
+        assert!(bluetooth_fallback_allowed(true, None, now));
+        assert!(bluetooth_fallback_allowed(true, Some(ago(4)), now));
+        assert!(bluetooth_fallback_allowed(true, Some(ago(60)), now));
+        // USB was in use a moment ago: the dongle may be about to come back.
+        assert!(!bluetooth_fallback_allowed(true, Some(ago(0)), now));
+        assert!(!bluetooth_fallback_allowed(true, Some(ago(3)), now));
+        // Not allowed by the user: never.
+        assert!(!bluetooth_fallback_allowed(false, None, now));
+        assert!(!bluetooth_fallback_allowed(false, Some(ago(60)), now));
     }
     #[test]
     fn level_polling_resumes_when_the_sidetone_range_arrives_late() {
