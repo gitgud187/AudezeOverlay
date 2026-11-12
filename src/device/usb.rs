@@ -1,6 +1,8 @@
 //! The headset's sound commands over one connection.
 //! Wire framing and parsing are in `protocol`; what carries the frames is a
 //! `Link`, which for the dongle and USB cable is the platform's HID access in `hid`.
+#[cfg(target_os = "macos")]
+use super::bluetooth::{self, BluetoothLink, Channel};
 use super::command::Command;
 use super::hid::{InputStream, Interface};
 use super::link::{HidLink, Link};
@@ -34,27 +36,73 @@ impl Device {
     /// Opens the one control interface this application should use. Fails with an
     /// explanation when nothing usable is connected or the choice is ambiguous.
     pub fn open() -> Result<Self> {
+        Self::open_with(false)
+    }
+    /// Like [`Device::open`], and when `bluetooth` is allowed and no USB device is
+    /// connected, falls back to the headset's Bluetooth control channel. A USB
+    /// device always wins: with the dongle or cable present, Bluetooth is not
+    /// opened at all. Several USB candidates are an error, never a reason to fall
+    /// back. Bluetooth is only attempted where it exists (macOS).
+    pub fn open_with(bluetooth: bool) -> Result<Self> {
         let found = hid::enumerate()?;
-        let chosen =
-            selection::choose(found.candidates, &found.wired_seen).map_err(|e| e.to_string())?;
-        Ok(Self::new(chosen.profile, chosen.usb_cable, chosen.endpoint))
+        match selection::choose(found.candidates, &found.wired_seen) {
+            Ok(chosen) => Ok(Self::new(chosen.profile, chosen.usb_cable, chosen.endpoint)),
+            Err(selection::SelectionError::NoDevice) if bluetooth => Self::open_bluetooth()
+                .map_err(|e| e.unwrap_or_else(|| selection::SelectionError::NoDevice.to_string())),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+    /// Opens the Bluetooth control channel. `Err(None)` means there is no headset
+    /// to open, which is the ordinary "nothing connected" case; `Err(Some(_))`
+    /// explains a real failure.
+    #[cfg(target_os = "macos")]
+    fn open_bluetooth() -> std::result::Result<Self, Option<String>> {
+        match Channel::open(bluetooth::DEVICE_NAME) {
+            Ok(channel) => Ok(Self::with_link(
+                Profile::bluetooth_maxwell(),
+                false,
+                format!("bluetooth:{}", bluetooth::DEVICE_NAME),
+                Box::new(BluetoothLink::new(channel)),
+            )),
+            Err(bluetooth::OpenError::Absent(_)) => Err(None),
+            Err(bluetooth::OpenError::Failed(message)) => Err(Some(message)),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    fn open_bluetooth() -> std::result::Result<Self, Option<String>> {
+        Err(None)
     }
     fn new(profile: Profile, usb_cable: bool, interface: Interface) -> Self {
+        let link = HidLink::new(interface.hid, interface.output_len, profile.route());
+        Self::with_link(profile, usb_cable, interface.id, Box::new(link))
+    }
+    fn with_link(profile: Profile, usb_cable: bool, id: String, link: Box<dyn Link>) -> Self {
         Self {
             profile,
             usb_cable,
             sidetone_max: profile.verified().then_some(31),
-            id: interface.id,
-            link: Box::new(HidLink::new(
-                interface.hid,
-                interface.output_len,
-                profile.route(),
-            )),
+            id,
+            link,
             chunk: Vec::with_capacity(64),
             stream: Vec::with_capacity(256),
             eq_slot: 6,
             eq_read_slot: None,
         }
+    }
+    /// Whether this device is controlled over Bluetooth.
+    pub fn is_bluetooth(&self) -> bool {
+        self.profile.connection == crate::model::Connection::Bluetooth
+    }
+    /// Whether the connection this device was opened on is no longer the one to
+    /// use, so the caller should reopen. A USB device is replaced when its
+    /// interface changed. A Bluetooth device is replaced when a USB device has
+    /// appeared (USB wins) or Bluetooth is no longer `allowed`.
+    pub fn endpoint_changed(&self, bluetooth_allowed: bool) -> Result<bool> {
+        if self.is_bluetooth() {
+            return Ok(!bluetooth_allowed || Self::open_with(false).is_ok());
+        }
+        let current = Self::open_with(false)?;
+        Ok(!self.same_endpoint(&current))
     }
     pub fn same_endpoint(&self, other: &Self) -> bool {
         self.id == other.id && self.usb_cable == other.usb_cable
@@ -304,6 +352,91 @@ mod tests {
         let (mut verified, writes) = device(0x4ba9);
         verified.set(&Command::SidetoneLevel(50)).unwrap();
         assert_eq!(writes.borrow()[0][9..12], [0x2c, 0, 16]);
+    }
+
+    /// A link that records every frame sent and replays scripted chunks.
+    struct FakeLink(Writes, VecDeque<Vec<u8>>);
+    impl Link for FakeLink {
+        fn send(&mut self, frame: &[u8]) -> Result<()> {
+            self.0.borrow_mut().push(frame.to_vec());
+            Ok(())
+        }
+        fn receive(&mut self, chunk: &mut Vec<u8>) -> Result<bool> {
+            chunk.clear();
+            match self.1.pop_front() {
+                Some(bytes) => {
+                    chunk.extend_from_slice(&bytes);
+                    Ok(true)
+                }
+                None => Ok(false),
+            }
+        }
+    }
+    fn bluetooth_device(replies: &[&[u8]]) -> (Device, Writes) {
+        let writes = Writes::default();
+        let link = FakeLink(writes.clone(), replies.iter().map(|r| r.to_vec()).collect());
+        let device = Device::with_link(
+            Profile::bluetooth_maxwell(),
+            false,
+            "bluetooth".into(),
+            Box::new(link),
+        );
+        (device, writes)
+    }
+
+    #[test]
+    fn bluetooth_sends_bare_frames_for_the_verified_controls_only() {
+        let (mut device, writes) = bluetooth_device(&[]);
+        assert!(device.is_bluetooth());
+        device.set(&Command::Mix(52)).unwrap();
+        device.set(&Command::Sidetone(true)).unwrap();
+        device.set(&Command::Noise("High".into())).unwrap();
+        device.query(Query::Battery).unwrap();
+        assert_eq!(
+            *writes.borrow(),
+            [
+                vec![5, 0x5a, 5, 0, 0x82, 0x2c, 0x0b, 0, 10],
+                vec![5, 0x5a, 5, 0, 0x82, 0x2c, 7, 0, 1],
+                vec![5, 0x5a, 5, 0, 0, 9, 0x24, 0, 2],
+                vec![5, 0x5a, 3, 0, 0xd6, 0x0c, 0],
+            ],
+            "no HID report header or route byte"
+        );
+        let before = writes.borrow().len();
+        assert!(device.set(&Command::Anc("On".into())).is_err());
+        assert!(device.set(&Command::EqSelect(2)).is_err());
+        assert!(device.query(Query::Anc).is_err());
+        assert!(device.query(Query::EqBands).is_err());
+        assert_eq!(writes.borrow().len(), before, "nothing else was sent");
+    }
+
+    #[test]
+    fn bluetooth_range_is_read_before_a_sidetone_level_is_sent() {
+        let (mut device, writes) = bluetooth_device(&[&[5, 0x5b, 6, 0, 1, 9, 0x2d, 0, 0, 31]]);
+        assert!(device.set(&Command::SidetoneLevel(50)).is_err());
+        assert!(writes.borrow().is_empty());
+        let mut state = SoundState::default();
+        assert!(device
+            .read(&mut state)
+            .unwrap()
+            .contains(&Query::MaxSidetone));
+        device.set(&Command::SidetoneLevel(50)).unwrap();
+        assert_eq!(writes.borrow()[0], [5, 0x5a, 5, 0, 0, 9, 0x2c, 0, 16]);
+    }
+
+    #[test]
+    fn bluetooth_replies_arriving_together_or_split_are_all_parsed() {
+        let mix = [5, 0x5b, 6, 0, 0x83, 0x2c, 0, 0x0b, 0, 12];
+        let battery = [5, 0x5d, 5, 0, 0xd6, 0x0c, 0, 0, 59];
+        let both = [mix.as_slice(), battery.as_slice()].concat();
+        let (mut device, _) = bluetooth_device(&[&both[..4], &both[4..]]);
+        let mut state = SoundState::default();
+        assert!(device.read(&mut state).unwrap().is_empty());
+        let updates: Vec<_> = device.read(&mut state).unwrap().into_iter().collect();
+        assert_eq!(updates, [Query::Mix, Query::Battery]);
+        assert_eq!(state.mix, Some((40, 60)));
+        assert_eq!(state.battery, Some(59));
+        assert_eq!(state.transport, Some(crate::model::Connection::Bluetooth));
     }
 
     #[test]

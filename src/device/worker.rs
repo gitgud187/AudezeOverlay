@@ -117,8 +117,12 @@ fn resume_level_polling(
         other => other,
     }
 }
-fn query_interval(q: Query) -> Duration {
+fn query_interval(q: Query, connection: crate::model::Connection) -> Duration {
     Duration::from_millis(match q {
+        // Bluetooth shares its radio with the audio link, and the headset never
+        // announces changes, so the mix is polled. A quarter of a second still
+        // follows a dial turn closely (measured replies take 40-60 ms).
+        Query::Mix if connection == crate::model::Connection::Bluetooth => 250,
         Query::Mix => 50,
         Query::Battery => 30000,
         // Five 400 ms background queries consumed about half the serial
@@ -251,6 +255,7 @@ pub fn start(
     let (tx, rx) = sync_channel(1);
     let c = Controller {
         topology_changed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        bluetooth_allowed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         sequence: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         mix_sequence: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         pending: Arc::new(Mutex::new(VecDeque::new())),
@@ -284,7 +289,12 @@ pub fn start(
             let mut retry_after = Duration::from_secs(2);
             let mut unavailable = None;
             let result = (|| -> Result<()> {
-                let mut device = Device::open()?;
+                let mut device = Device::open_with(
+                    worker
+                        .bluetooth_allowed
+                        .load(std::sync::atomic::Ordering::Acquire),
+                )?;
+                let connection = device.profile.connection;
                 let mut restore_mix =
                     cable_mix.reconnect(device.profile, device.usb_cable, Instant::now());
                 let restore_until = Instant::now() + Duration::from_secs(1);
@@ -313,11 +323,13 @@ pub fn start(
                         .swap(false, std::sync::atomic::Ordering::AcqRel)
                     {
                         bluetooth = super::bluetooth_status::connected();
-                        let current = Device::open()?;
-                        if !device.same_endpoint(&current) {
+                        let allowed = worker
+                            .bluetooth_allowed
+                            .load(std::sync::atomic::Ordering::Acquire);
+                        if device.endpoint_changed(allowed)? {
                             retry_after = Duration::from_millis(100);
                             return Err(
-                                "USB connection changed. Refreshing headset readings…".into()
+                                "Headset connection changed. Refreshing headset readings…".into()
                             );
                         }
                     }
@@ -418,7 +430,7 @@ pub fn start(
                         flight = Some((q, written, request_sequence));
                         previous = Some(q);
                         read_ready = written + Duration::from_millis(25);
-                        due[i] = Some(written + query_interval(q));
+                        due[i] = Some(written + query_interval(q, connection));
                     }
                     let mut updated_fields = 0u16;
                     let mut received = Instant::now();
@@ -590,7 +602,7 @@ pub fn start(
                                 let retry = if waiting.iter().any(|(wq, _, _)| *wq == q) {
                                     Duration::from_millis(50)
                                 } else {
-                                    query_interval(q)
+                                    query_interval(q, connection)
                                 };
                                 due[q as usize] = Some(Instant::now() + retry);
                             }
@@ -613,7 +625,12 @@ pub fn start(
                         state_may_have_changed = true;
                         last_good = Some(Instant::now());
                         if state.status.is_empty() {
-                            state.status = "Direct USB · Audeze app not required".into();
+                            state.status = if device.is_bluetooth() {
+                                "Direct Bluetooth · Audeze app not required"
+                            } else {
+                                "Direct USB · Audeze app not required"
+                            }
+                            .into();
                         }
                     }
                     if updated_fields & (1 << Query::Mix as u8) != 0 {
@@ -806,12 +823,13 @@ pub fn command_matches(c: &Command, s: &SoundState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const WIRED: crate::model::Connection = crate::model::Connection::WirelessDongle;
     #[test]
     fn unavailable_fields_are_never_scheduled_even_long_after_connecting() {
         let start = Instant::now();
         let mut due = [None; 12];
         due[0] = Some(start);
-        due[Query::Battery as usize] = Some(start + query_interval(Query::Battery));
+        due[Query::Battery as usize] = Some(start + query_interval(Query::Battery, WIRED));
         let much_later = start + Duration::from_secs(400 * 24 * 3600);
         assert_eq!(
             next_query(&due, much_later, Some(Query::Mix)),
@@ -865,7 +883,22 @@ mod tests {
             ),
             Some(ReadyWork::Query(Query::EqBands))
         );
-        assert_eq!(query_interval(Query::Mix), Duration::from_millis(50));
+        assert_eq!(query_interval(Query::Mix, WIRED), Duration::from_millis(50));
+        assert_eq!(
+            query_interval(Query::Mix, crate::model::Connection::Bluetooth),
+            Duration::from_millis(250)
+        );
+        for q in [Query::Side, Query::Level, Query::Noise, Query::Mute] {
+            assert_eq!(
+                query_interval(q, crate::model::Connection::Bluetooth),
+                query_interval(q, WIRED),
+                "only the mix is polled differently over Bluetooth"
+            );
+        }
+        assert_eq!(
+            query_interval(Query::Battery, crate::model::Connection::Bluetooth),
+            Duration::from_secs(30)
+        );
         assert_eq!(query_timeout(Query::Mix), Duration::from_millis(160));
         assert_eq!(query_timeout(Query::EqWriteAck), Duration::from_millis(500));
         assert_eq!(query_timeout(Query::Anc), Duration::from_millis(100));

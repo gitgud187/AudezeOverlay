@@ -10,7 +10,7 @@
 //!
 //! The process must be a launched app bundle with `NSBluetoothAlwaysUsageDescription`;
 //! a bare command-line process is aborted by macOS at the first IOBluetooth call.
-use super::SERVICE_UUID;
+use super::{OpenError, SERVICE_UUID};
 use block2::RcBlock;
 use objc2::{
     define_class, msg_send,
@@ -39,6 +39,7 @@ use std::{
 };
 
 type Result<T> = std::result::Result<T, String>;
+type OpenResult<T> = std::result::Result<T, OpenError>;
 
 /// How long opening the link may take before it is reported as failed.
 const OPEN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -65,33 +66,36 @@ pub enum Event {
 ///
 /// Only one link exists at a time, and it can only be opened and used from a
 /// thread other than the main thread, which must be running its run loop.
-pub struct Link {
+pub struct Channel {
     events: Receiver<Event>,
     mtu: u16,
 }
 
-impl Link {
+impl Channel {
     /// Opens the control channel of the paired device named exactly `device_name`.
     ///
     /// Fails, with an explanation, when called on the main thread, the main run
     /// loop is not running, a link is already open, no or several paired devices
     /// match, the device is not connected, it has no serial service, or the
     /// channel does not open within [`OPEN_TIMEOUT`].
-    pub fn open(device_name: &str) -> Result<Self> {
+    pub fn open(device_name: &str) -> OpenResult<Self> {
         if MainThreadMarker::new().is_some() {
-            return Err(
+            return Err(OpenError::Failed(
                 "The Bluetooth link must be opened from a thread other than the main thread."
                     .into(),
-            );
+            ));
         }
         let (event_tx, events) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel();
         let name = device_name.to_owned();
         on_main_run_loop(move || {
             let _ = ready_tx.send(install_session(&name, event_tx));
-        })?;
+        })
+        .map_err(OpenError::Failed)?;
         ready_rx.recv_timeout(OPEN_TIMEOUT).map_err(|_| {
-            "The main run loop is not running, so the channel cannot open.".to_string()
+            OpenError::Failed(
+                "The main run loop is not running, so the channel cannot open.".into(),
+            )
         })??;
         let mut link = Self { events, mtu: 0 };
         match link.recv(OPEN_TIMEOUT) {
@@ -99,11 +103,15 @@ impl Link {
                 link.mtu = mtu;
                 Ok(link)
             }
-            Some(Event::Opened { status, .. }) => {
-                Err(format!("The channel did not open (IOReturn {status:#x})."))
-            }
-            Some(Event::Closed) => Err("The channel closed while opening.".into()),
-            Some(Event::Data(_)) | None => Err("The channel did not open in time.".into()),
+            Some(Event::Opened { status, .. }) => Err(OpenError::Failed(format!(
+                "The channel did not open (IOReturn {status:#x})."
+            ))),
+            Some(Event::Closed) => Err(OpenError::Failed(
+                "The channel closed while opening.".into(),
+            )),
+            Some(Event::Data(_)) | None => Err(OpenError::Failed(
+                "The channel did not open in time.".into(),
+            )),
         }
     }
 
@@ -157,7 +165,7 @@ impl Link {
     }
 }
 
-impl Drop for Link {
+impl Drop for Channel {
     fn drop(&mut self) {
         let (done_tx, done_rx) = mpsc::channel();
         let queued = on_main_run_loop(move || {
@@ -255,9 +263,11 @@ fn with_session<R>(action: impl FnOnce(&Session) -> R) -> Option<R> {
 }
 
 /// Opens the channel and stores it as the main thread's session.
-fn install_session(name: &str, events: Sender<Event>) -> Result<()> {
+fn install_session(name: &str, events: Sender<Event>) -> OpenResult<()> {
     if SESSION.with(|cell| cell.borrow().is_some()) {
-        return Err("A Bluetooth link is already open.".into());
+        return Err(OpenError::Failed(
+            "A Bluetooth link is already open.".into(),
+        ));
     }
     let session = open_channel(name, events)?;
     SESSION.with(|cell| *cell.borrow_mut() = Some(session));
@@ -320,13 +330,15 @@ impl ChannelDelegate {
     }
 }
 
-fn open_channel(name: &str, events: Sender<Event>) -> Result<Session> {
+fn open_channel(name: &str, events: Sender<Event>) -> OpenResult<Session> {
     let device = find_device(name)?;
     // SAFETY: plain property read on a live device.
     if !unsafe { device.isConnected() } {
-        return Err(format!("{name} is paired but not connected."));
+        return Err(OpenError::Absent(format!(
+            "{name} is paired but not connected."
+        )));
     }
-    let channel_id = rfcomm_channel_id(&device)?;
+    let channel_id = rfcomm_channel_id(&device).map_err(OpenError::Failed)?;
     let delegate = ChannelDelegate::new(events);
     let mut channel = None;
     // SAFETY: `channel` receives the opened channel; the delegate is retained by
@@ -343,18 +355,18 @@ fn open_channel(name: &str, events: Sender<Event>) -> Result<Session> {
             channel,
             _delegate: delegate,
         }),
-        (0, None) => Err("IOBluetooth returned no channel.".into()),
-        (status, _) => Err(format!(
+        (0, None) => Err(OpenError::Failed("IOBluetooth returned no channel.".into())),
+        (status, _) => Err(OpenError::Failed(format!(
             "Opening the channel failed (IOReturn {status:#x})."
-        )),
+        ))),
     }
 }
 
 /// The one paired device whose name is exactly `name`.
-fn find_device(name: &str) -> Result<Retained<IOBluetoothDevice>> {
+fn find_device(name: &str) -> OpenResult<Retained<IOBluetoothDevice>> {
     // SAFETY: class method without preconditions; it returns nil when nothing is paired.
     let paired = unsafe { IOBluetoothDevice::pairedDevices() }
-        .ok_or("No paired Bluetooth devices were found.")?;
+        .ok_or_else(|| OpenError::Absent("No paired Bluetooth devices were found.".into()))?;
     let mut matches = paired
         .iter()
         .filter_map(|object| object.downcast::<IOBluetoothDevice>().ok())
@@ -366,8 +378,12 @@ fn find_device(name: &str) -> Result<Retained<IOBluetoothDevice>> {
         });
     match (matches.next(), matches.next()) {
         (Some(device), None) => Ok(device),
-        (None, _) => Err(format!("No paired device is named \"{name}\".")),
-        (Some(_), Some(_)) => Err(format!("Several paired devices are named \"{name}\".")),
+        (None, _) => Err(OpenError::Absent(format!(
+            "No paired device is named \"{name}\"."
+        ))),
+        (Some(_), Some(_)) => Err(OpenError::Failed(format!(
+            "Several paired devices are named \"{name}\"."
+        ))),
     }
 }
 

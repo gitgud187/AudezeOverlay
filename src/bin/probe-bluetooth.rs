@@ -30,7 +30,7 @@ fn main() -> std::process::ExitCode {
 mod probe {
     use audeze_overlay::{
         device::{
-            bluetooth::{Event, Link, ReadRequest, DEVICE_NAME},
+            bluetooth::{Channel, Event, ReadRequest, DEVICE_NAME},
             consume_stream_bytes, Query,
         },
         model::SoundState,
@@ -84,13 +84,13 @@ mod probe {
 
     /// Splits the channel's byte stream into frames with the same code the USB path uses.
     struct Receiver<'a> {
-        link: &'a Link,
+        link: &'a Channel,
         stream: Vec<u8>,
         state: SoundState,
     }
 
     impl<'a> Receiver<'a> {
-        fn new(link: &'a Link) -> Self {
+        fn new(link: &'a Channel) -> Self {
             Self {
                 link,
                 stream: Vec::new(),
@@ -139,7 +139,7 @@ mod probe {
 
     pub fn run(options: &Options) -> Result<(), String> {
         let opened = Instant::now();
-        let link = Link::open(&options.device)?;
+        let link = Channel::open(&options.device).map_err(String::from)?;
         println!(
             "opened in {:.0} ms, mtu {}",
             ms(opened.elapsed()),
@@ -221,7 +221,7 @@ mod probe {
     /// and reports whether the headset kept up. Only reads; the effect on the
     /// headset's battery is not measured here.
     fn poll(
-        link: &Link,
+        link: &Channel,
         receiver: &mut Receiver<'_>,
         interval_ms: u64,
         seconds: u64,

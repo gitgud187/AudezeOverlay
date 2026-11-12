@@ -10,8 +10,36 @@ pub struct Profile {
     pub xbox: bool,
 }
 impl Profile {
+    /// The Maxwell 1 on its Bluetooth control channel.
+    ///
+    /// Bluetooth reports no USB product ID, so `product_id` is zero. The headset
+    /// is recognized by its exact paired name and its control service, not by any
+    /// ID. Whether it is the Xbox or PlayStation variant is not determined over
+    /// Bluetooth (the headset-type read is unverified), so `xbox` is false; it only
+    /// selects EQ names, and this model has no EQ editing.
+    pub fn bluetooth_maxwell() -> Self {
+        Self {
+            product_id: 0,
+            family: HeadsetFamily::Maxwell,
+            connection: Connection::Bluetooth,
+            xbox: false,
+        }
+    }
     pub fn supports_query(self, query: super::protocol::Query) -> bool {
         use super::protocol::Query;
+        if self.connection == Connection::Bluetooth {
+            // Only the reads verified over Bluetooth; no ANC and no EQ.
+            return matches!(
+                query,
+                Query::Mix
+                    | Query::Side
+                    | Query::Level
+                    | Query::Noise
+                    | Query::Mute
+                    | Query::Battery
+                    | Query::MaxSidetone
+            );
+        }
         match query {
             Query::Anc => self.capabilities().anc,
             Query::EqBands | Query::EqWriteAck => self.capabilities().eq_edit,
@@ -20,6 +48,16 @@ impl Profile {
     }
     pub fn supports_command(self, command: &super::command::Command) -> bool {
         use super::command::Command;
+        if self.connection == Connection::Bluetooth {
+            // Only the writes verified over Bluetooth.
+            return matches!(
+                command,
+                Command::Mix(_)
+                    | Command::Sidetone(_)
+                    | Command::SidetoneLevel(_)
+                    | Command::Noise(_)
+            );
+        }
         match command {
             Command::Anc(_) => self.capabilities().anc,
             Command::EqLoad(_) | Command::EqGain { .. } => self.capabilities().eq_edit,
@@ -95,6 +133,49 @@ mod tests {
             assert!(!p.supports_query(super::super::protocol::Query::Anc));
             assert!(!p.supports_command(&super::super::command::Command::EqLoad(6)));
             assert!(p.supports_command(&super::super::command::Command::EqSelect(6)));
+        }
+    }
+
+    #[test]
+    fn bluetooth_allows_only_the_verified_reads_and_writes() {
+        use super::super::{command::Command, protocol::Query};
+        let profile = Profile::bluetooth_maxwell();
+        assert!(!profile.verified());
+        for query in [
+            Query::Mix,
+            Query::Side,
+            Query::Level,
+            Query::Noise,
+            Query::Mute,
+            Query::Battery,
+            Query::MaxSidetone,
+        ] {
+            assert!(profile.supports_query(query), "{query:?}");
+        }
+        for query in [
+            Query::Anc,
+            Query::EqIndex,
+            Query::EqBands,
+            Query::EqWriteAck,
+            Query::EqSelectAck,
+        ] {
+            assert!(!profile.supports_query(query), "{query:?}");
+        }
+        for command in [
+            Command::Mix(50),
+            Command::Sidetone(true),
+            Command::SidetoneLevel(40),
+            Command::Noise("Low".into()),
+        ] {
+            assert!(profile.supports_command(&command), "{command:?}");
+        }
+        for command in [
+            Command::Anc("On".into()),
+            Command::EqSelect(2),
+            Command::EqRefresh,
+            Command::EqLoad(6),
+        ] {
+            assert!(!profile.supports_command(&command), "{command:?}");
         }
     }
 

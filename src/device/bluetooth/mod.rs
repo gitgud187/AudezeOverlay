@@ -4,9 +4,11 @@
 //! without the HID report wrapper. Protocol notes and the evidence behind each
 //! frame are in `docs/BLUETOOTH_PROTOCOL.md`. Nothing in the application uses this
 //! channel yet; it exists for the read-only `probe-bluetooth` diagnostic.
+mod link;
 mod mac;
 
-pub use mac::{host_main_run_loop, Event, Link};
+pub(super) use link::BluetoothLink;
+pub use mac::{host_main_run_loop, Channel, Event};
 
 /// Exact name the headset is paired under. Names are user-editable, so this is a
 /// lookup key for the diagnostic and never a capability grant.
@@ -17,6 +19,50 @@ pub const DEVICE_NAME: &str = "Audeze Maxwell BT";
 pub const SERVICE_UUID: [u8; 16] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
 ];
+
+/// Why the control channel could not be opened.
+#[derive(Debug, PartialEq, Eq)]
+pub enum OpenError {
+    /// The headset is not paired or not connected, so there is nothing to open.
+    /// This is the ordinary "no headset" case, not a fault.
+    Absent(String),
+    /// A headset is there but the channel could not be opened.
+    Failed(String),
+}
+
+impl OpenError {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Absent(message) | Self::Failed(message) => message,
+        }
+    }
+}
+
+impl From<OpenError> for String {
+    fn from(error: OpenError) -> Self {
+        error.message().to_owned()
+    }
+}
+
+/// Whether `frame` may be sent over Bluetooth: the status reads, and the four
+/// writes verified with read-back and restore on a Maxwell 1 (mix, sidetone,
+/// sidetone level, noise removal; see `docs/BLUETOOTH_PROTOCOL.md`). Anything
+/// else is refused, however the caller got hold of it. Airoha headsets accept
+/// other commands, firmware update among them, which this application never sends.
+pub fn permits(frame: &[u8]) -> bool {
+    ReadRequest::ALL
+        .iter()
+        .any(|request| request.frame() == frame)
+        || matches!(
+            frame,
+            // Mix 0..=20 in 5 % steps, sidetone off/on, sidetone level, noise
+            // removal off/low/high. 31 is the sidetone maximum this unit reports.
+            [0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x0b, 0x00, 0..=20]
+                | [0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x07, 0x00, 0..=1]
+                | [0x05, 0x5a, 0x05, 0x00, 0x00, 0x09, 0x2c, 0x00, 0..=31]
+                | [0x05, 0x5a, 0x05, 0x00, 0x00, 0x09, 0x24, 0x00, 0..=2]
+        )
+}
 
 /// A status read the headset answers without changing anything. This is the whole
 /// set the diagnostic may send: there is deliberately no write request and no way
@@ -133,6 +179,43 @@ mod tests {
             // must never be mistaken for one.
             assert_ne!(frame[4], 0x82, "{request:?}");
             assert_ne!(frame[4..6], [0x00, 0x09], "{request:?}");
+        }
+    }
+
+    #[test]
+    fn only_reads_and_the_four_verified_writes_are_permitted() {
+        for request in ReadRequest::ALL {
+            assert!(permits(request.frame()), "{request:?}");
+        }
+        // The documented write frames, at their edges.
+        for frame in [
+            &[0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x0b, 0x00, 0][..],
+            &[0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x0b, 0x00, 20],
+            &[0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x07, 0x00, 1],
+            &[0x05, 0x5a, 0x05, 0x00, 0x00, 0x09, 0x2c, 0x00, 31],
+            &[0x05, 0x5a, 0x05, 0x00, 0x00, 0x09, 0x24, 0x00, 2],
+        ] {
+            assert!(permits(frame), "{frame:02x?}");
+        }
+        // Out-of-range values, the unverified writes and arbitrary bytes.
+        for frame in [
+            &[0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x0b, 0x00, 21][..],
+            &[0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x07, 0x00, 2],
+            &[0x05, 0x5a, 0x05, 0x00, 0x00, 0x09, 0x2c, 0x00, 32],
+            &[0x05, 0x5a, 0x05, 0x00, 0x00, 0x09, 0x24, 0x00, 3],
+            // Voice prompt and auto-shutdown writes: documented, not exposed.
+            &[0x05, 0x5a, 0x05, 0x00, 0x00, 0x09, 0x20, 0x00, 4],
+            &[
+                0x05, 0x5a, 0x0c, 0x00, 0x82, 0x2c, 0x01, 0x00, 0x01, 0x00, 0x10, 0x0e, 0x01, 0x00,
+                0x10, 0x0e,
+            ],
+            // A valid write with an extra byte, a truncated one, and noise.
+            &[0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x0b, 0x00, 10, 0],
+            &[0x05, 0x5a, 0x05, 0x00, 0x82, 0x2c, 0x0b, 0x00],
+            &[0x05, 0x5a, 0x03, 0x00, 0x51, 0x1c, 0x00],
+            &[],
+        ] {
+            assert!(!permits(frame), "{frame:02x?}");
         }
     }
 

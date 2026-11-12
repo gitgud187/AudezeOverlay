@@ -33,7 +33,7 @@ impl Connection {
         match self {
             Self::WirelessDongle => "Wireless dongle",
             Self::WiredUsb => "Wired USB",
-            Self::Bluetooth => "Bluetooth (Windows)",
+            Self::Bluetooth => "Bluetooth",
         }
     }
 }

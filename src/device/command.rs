@@ -52,6 +52,8 @@ pub(crate) struct QueuedCommand {
 #[derive(Clone)]
 pub struct Controller {
     pub(crate) topology_changed: Arc<AtomicBool>,
+    /// The user has turned on Bluetooth control. Off until they do.
+    pub(crate) bluetooth_allowed: Arc<AtomicBool>,
     pub(crate) pending: Arc<Mutex<VecDeque<QueuedCommand>>>,
     pub(crate) sequence: Arc<AtomicU64>,
     pub(crate) mix_sequence: Arc<AtomicU64>,
@@ -63,6 +65,13 @@ impl Controller {
     pub fn devices_changed(&self) {
         self.topology_changed.store(true, Ordering::Release);
         let _ = self.wake.try_send(());
+    }
+    /// Allows or forbids controlling the headset over Bluetooth when no USB
+    /// dongle or cable is connected. The worker acts on it at once, closing an
+    /// open Bluetooth connection when it is turned off.
+    pub fn set_bluetooth_control(&self, allowed: bool) {
+        self.bluetooth_allowed.store(allowed, Ordering::Release);
+        self.devices_changed();
     }
     pub fn last_error(&self) -> Option<String> {
         self.error.lock().unwrap().clone()
