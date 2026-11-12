@@ -77,8 +77,8 @@ fn main() {
         h: 8,
         visible: true,
     };
-    for i in 1..6 {
-        minimum.cards[i] = layout::Card {
+    for (i, card) in minimum.cards.iter_mut().enumerate().skip(1) {
+        *card = layout::Card {
             x: 5,
             y: (i as i32 - 1) * 3,
             w: 5,
