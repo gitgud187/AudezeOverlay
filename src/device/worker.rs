@@ -660,7 +660,7 @@ pub fn start(
                         last_good = Some(Instant::now());
                         if state.status.is_empty() {
                             state.status = if device.is_bluetooth() {
-                                "Direct Bluetooth · Audeze app not required"
+                                "Connected over Bluetooth"
                             } else {
                                 "Direct USB · Audeze app not required"
                             }
