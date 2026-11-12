@@ -201,6 +201,10 @@ impl Device {
     pub fn chunk(&self) -> &[u8] {
         &self.chunk
     }
+    /// The same delivery as it was on the wire, wrapper included, for traces.
+    pub fn wire_bytes(&self) -> &[u8] {
+        self.link.wire_bytes(&self.chunk)
+    }
     pub fn consume(&mut self, state: &mut SoundState) -> QueryUpdates {
         self.consume_observed(state, |_, _, _| {})
     }

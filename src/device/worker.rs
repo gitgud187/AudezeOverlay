@@ -446,7 +446,7 @@ pub fn start(
                                 received = Instant::now();
                                 let raw = if trace.enabled() {
                                     device
-                                        .chunk()
+                                        .wire_bytes()
                                         .iter()
                                         .map(|b| format!("{b:02x}"))
                                         .collect::<Vec<_>>()
