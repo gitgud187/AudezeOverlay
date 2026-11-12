@@ -123,8 +123,8 @@ unsafe fn run() -> Result<()> {
                 h: 12,
                 visible: true,
             };
-            for n in 1..4 {
-                config.cards[n] = Card {
+            for (n, card) in config.cards.iter_mut().enumerate().take(4).skip(1) {
+                *card = Card {
                     x: 0,
                     y: 12 + (n as i32 - 1) * 5,
                     w: 12,
