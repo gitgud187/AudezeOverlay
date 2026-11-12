@@ -26,6 +26,8 @@
 	<string>11.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Audeze Overlay reads and sets your headset's sound controls over Bluetooth when no USB dongle is connected. This is off until you turn it on in the menu.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>

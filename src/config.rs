@@ -41,6 +41,9 @@ pub struct Config {
     pub snap: bool,
     pub locked: bool,
     pub autostart: bool,
+    /// Control the headset over Bluetooth when no USB dongle or cable is
+    /// connected (macOS, experimental). Off until the user turns it on.
+    pub bluetooth_control: bool,
     pub low_battery: u8,
     pub animations: bool,
     pub settings_page: usize,
@@ -82,6 +85,7 @@ impl Default for Config {
             snap: true,
             locked: false,
             autostart: false,
+            bluetooth_control: false,
             low_battery: 20,
             animations: true,
             settings_page: 0,
@@ -375,6 +379,15 @@ fn deserialize_cards<'de, D: serde::Deserializer<'de>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bluetooth_control_is_off_until_the_user_turns_it_on() {
+        assert!(!Config::default().bluetooth_control);
+        // Settings saved before the option existed keep it off.
+        let old: Config = serde_json::from_str("{}").unwrap();
+        assert!(!old.bluetooth_control);
+        let on: Config = serde_json::from_str(r#"{"bluetooth_control":true}"#).unwrap();
+        assert!(on.bluetooth_control);
+    }
     #[test]
     fn preserving_space_keeps_gaps_edges_and_card_dimensions() {
         let mut c = Config {

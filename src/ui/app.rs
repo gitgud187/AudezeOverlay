@@ -252,6 +252,11 @@ pub(in crate::ui) fn position(app: &mut App) {
     });
 }
 pub(in crate::ui) fn save(app: &mut App) {
+    // Every path that changes preferences ends here, including a factory reset,
+    // so the worker never disagrees with the saved Bluetooth choice.
+    if let Some(controller) = &app.controller {
+        controller.set_bluetooth_control(app.config.bluetooth_control);
+    }
     if !app.demo {
         if let Err(e) = app.config.save() {
             app.note = format!("Could not save settings: {e}").into();

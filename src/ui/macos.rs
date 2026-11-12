@@ -186,6 +186,9 @@ fn run() -> Result<()> {
             },
             latest,
         ));
+        if let Some(controller) = &app_state.app.controller {
+            controller.set_bluetooth_control(app_state.app.config.bluetooth_control);
+        }
     }
     STATE.with(|cell| *cell.borrow_mut() = Some(app_state));
 
@@ -569,6 +572,25 @@ define_class!(
         #[unsafe(method(quitApp:))]
         fn quit_app(&self, _: &AnyObject) {
             with_state(|state| tray_command(&mut state.app, TrayCommand::Quit));
+        }
+
+        #[unsafe(method(toggleBluetooth:))]
+        fn toggle_bluetooth(&self, _: &AnyObject) {
+            with_state(|state| {
+                state.app.config.bluetooth_control = !state.app.config.bluetooth_control;
+                save(&mut state.app);
+            });
+        }
+
+        // AppKit asks before showing each item. The checkmark follows the saved
+        // choice, so it stays right after a factory reset too.
+        #[unsafe(method(validateMenuItem:))]
+        fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
+            if item.action() == Some(sel!(toggleBluetooth:)) {
+                let on = with_state(|state| state.app.config.bluetooth_control).unwrap_or(false);
+                item.setState(if on { 1 } else { 0 });
+            }
+            true
         }
     }
 );
@@ -1421,6 +1443,8 @@ impl Shell for MacShell {
             add("Settings", sel!(settings:));
             add("Reset position", sel!(resetPosition:));
             add("Hide", sel!(hidePanel:));
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+            add("Bluetooth control (experimental)", sel!(toggleBluetooth:));
             menu.addItem(&NSMenuItem::separatorItem(mtm));
             add("Quit", sel!(quitApp:));
         }

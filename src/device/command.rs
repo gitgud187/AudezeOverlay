@@ -70,8 +70,9 @@ impl Controller {
     /// dongle or cable is connected. The worker acts on it at once, closing an
     /// open Bluetooth connection when it is turned off.
     pub fn set_bluetooth_control(&self, allowed: bool) {
-        self.bluetooth_allowed.store(allowed, Ordering::Release);
-        self.devices_changed();
+        if self.bluetooth_allowed.swap(allowed, Ordering::AcqRel) != allowed {
+            self.devices_changed();
+        }
     }
     pub fn last_error(&self) -> Option<String> {
         self.error.lock().unwrap().clone()
@@ -106,5 +107,47 @@ impl Controller {
         });
         drop(queue);
         let _ = self.wake.try_send(());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::{sync_channel, Receiver};
+
+    fn controller() -> (Controller, Receiver<()>) {
+        let (wake, woken) = sync_channel(1);
+        let controller = Controller {
+            topology_changed: Arc::new(AtomicBool::new(false)),
+            bluetooth_allowed: Arc::new(AtomicBool::new(false)),
+            pending: Arc::new(Mutex::new(VecDeque::new())),
+            sequence: Arc::new(AtomicU64::new(0)),
+            mix_sequence: Arc::new(AtomicU64::new(0)),
+            wake,
+            error: Arc::new(Mutex::new(None)),
+        };
+        (controller, woken)
+    }
+
+    #[test]
+    fn bluetooth_control_wakes_the_worker_only_when_the_choice_changes() {
+        let (controller, woken) = controller();
+        // Saving unrelated settings repeats the current choice; that must stay quiet.
+        controller.set_bluetooth_control(false);
+        assert!(woken.try_recv().is_err());
+        assert!(!controller.topology_changed.load(Ordering::Acquire));
+
+        controller.set_bluetooth_control(true);
+        assert!(woken.try_recv().is_ok());
+        assert!(controller.topology_changed.swap(false, Ordering::AcqRel));
+        assert!(controller.bluetooth_allowed.load(Ordering::Acquire));
+
+        controller.set_bluetooth_control(true);
+        assert!(woken.try_recv().is_err());
+        assert!(!controller.topology_changed.load(Ordering::Acquire));
+
+        controller.set_bluetooth_control(false);
+        assert!(woken.try_recv().is_ok());
+        assert!(!controller.bluetooth_allowed.load(Ordering::Acquire));
     }
 }
